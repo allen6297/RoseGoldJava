@@ -1,6 +1,7 @@
 package com.rosegoldc.idea.run;
 
 import com.rosegoldc.idea.RoseGoldProjects;
+import com.rosegoldc.idea.RoseGoldSettings;
 import com.intellij.execution.actions.ConfigurationContext;
 import com.intellij.execution.actions.LazyRunConfigurationProducer;
 import com.intellij.execution.configurations.ConfigurationFactory;
@@ -29,6 +30,7 @@ public final class RoseGoldRunConfigurationProducer extends LazyRunConfiguration
             return false;
         }
         configuration.setFilePath(file.getPath());
+        configuration.setRunNative(RoseGoldSettings.getInstance().isRunNative());
         configuration.setGeneratedName();
         PsiElement location = context.getPsiLocation();
         if (location != null) {

@@ -6,8 +6,10 @@ import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 final class LlvmLink {
@@ -192,6 +194,7 @@ final class LlvmLink {
 
     static boolean isNativeDir(Path dir) {
         return dir != null && Files.isRegularFile(dir.resolve("runtime.c"))
+                && Files.isRegularFile(dir.resolve("host_ui.c"))
                 && Files.isRegularFile(dir.resolve("rg_value.h"));
     }
 
@@ -205,7 +208,10 @@ final class LlvmLink {
         cmd.add(output.toString());
         cmd.add(irFile.toString());
         cmd.add(runtimeC.toString());
-        if (!isWindows()) {
+        if (isWindows()) {
+            cmd.add("-luser32");
+            cmd.add("-lgdi32");
+        } else {
             cmd.add("-lm");
         }
         return cmd;
@@ -272,6 +278,74 @@ final class LlvmLink {
     }
 
     static Result exec(Path exe, List<String> argv, Result linked) throws IOException, InterruptedException {
+        return exec(exe, argv, linked, null, null);
+    }
+
+    static Result exec(Path exe, List<String> argv, Result linked, Path workDir, Map<String, String> extraEnv)
+            throws IOException, InterruptedException {
+        IOException blocked = null;
+        Path current = exe;
+        for (int i = 0; i < 8; i++) {
+            if (i > 0) {
+                current = copyForWdac(exe, i);
+                Thread.sleep(250L * i);
+            } else {
+                Thread.sleep(150L);
+            }
+            try {
+                return start(current, argv, linked, workDir, extraEnv);
+            } catch (IOException ex) {
+                if (!isWdacBlock(ex)) {
+                    throw ex;
+                }
+                blocked = ex;
+            }
+        }
+        String where = current == null ? String.valueOf(exe) : current.toString();
+        String detail = blocked == null ? "" : blocked.getMessage();
+        return new Result(false, 1,
+                "Windows Application Control blocked the native exe (error 4551). Allow "
+                        + where
+                        + " in Smart App Control / WDAC, or run llvm --link and start the exe yourself.\n"
+                        + detail,
+                exe, linked == null ? null : linked.clang, linked == null ? null : linked.command, "");
+    }
+
+    static Path runCacheDir() throws IOException {
+        String local = System.getenv("LOCALAPPDATA");
+        Path dir = local != null && !local.isBlank()
+                ? Path.of(local, "RoseGold", "run")
+                : Path.of(System.getProperty("user.home"), ".rosegold", "run");
+        Files.createDirectories(dir);
+        return dir;
+    }
+
+    static boolean isWdacBlock(IOException ex) {
+        String m = ex.getMessage();
+        return m != null && (m.contains("4551") || m.contains("Application Control"));
+    }
+
+    private static Path copyForWdac(Path src, int attempt) throws IOException {
+        Path dir = runCacheDir();
+        String name = src.getFileName() == null ? "rg" : src.getFileName().toString();
+        if (name.toLowerCase().endsWith(".exe")) {
+            name = name.substring(0, name.length() - 4);
+        }
+        Path dest = dir.resolve(name + "-" + ProcessHandle.current().pid() + "-" + attempt
+                + (isWindows() ? ".exe" : ""));
+        Files.copy(src, dest, StandardCopyOption.REPLACE_EXISTING);
+        dest.toFile().deleteOnExit();
+        return dest;
+    }
+
+    static Path stageExe(Path exe) throws IOException, InterruptedException {
+        Path staged = copyForWdac(exe, 0);
+        Thread.sleep(250L);
+        return staged;
+    }
+
+    private static Result start(Path exe, List<String> argv, Result linked, Path workDir, Map<String, String> extraEnv)
+            throws IOException, InterruptedException {
         List<String> cmd = new ArrayList<>();
         cmd.add(exe.toString());
         if (argv != null) {
@@ -279,6 +353,12 @@ final class LlvmLink {
         }
         ProcessBuilder pb = new ProcessBuilder(cmd);
         pb.redirectErrorStream(true);
+        if (workDir != null && Files.isDirectory(workDir)) {
+            pb.directory(workDir.toFile());
+        }
+        if (extraEnv != null) {
+            pb.environment().putAll(extraEnv);
+        }
         Process proc = pb.start();
         String out = new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
         if (!proc.waitFor(60, TimeUnit.SECONDS)) {

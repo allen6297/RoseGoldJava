@@ -1,0 +1,21 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Install LLVM
+        run: choco install llvm --yes --no-progress
+      - name: Test
+        env:
+          RG_UI_HEADLESS: "1"
+        run: ./gradlew.bat test --no-daemon

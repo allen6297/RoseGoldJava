@@ -536,7 +536,10 @@ public class LlvmTest {
         assertTrue(cmd.toString(), cmd.contains("-std=c11"));
         assertTrue(cmd.toString(), cmd.contains("-Wno-override-module"));
         assertTrue(cmd.toString(), cmd.stream().anyMatch(s -> s.replace('\\', '/').endsWith("native/runtime.c")));
-        if (!LlvmLink.isWindows()) {
+        if (LlvmLink.isWindows()) {
+            assertTrue(cmd.toString(), cmd.contains("-luser32"));
+            assertTrue(cmd.toString(), cmd.contains("-lgdi32"));
+        } else {
             assertTrue(cmd.toString(), cmd.contains("-lm"));
         }
     }

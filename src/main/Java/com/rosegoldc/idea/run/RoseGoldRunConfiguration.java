@@ -3,11 +3,14 @@ package com.rosegoldc.idea.run;
 import com.intellij.execution.ExecutionException;
 import com.intellij.execution.Executor;
 import com.intellij.execution.configurations.CommandLineState;
+import com.intellij.execution.configurations.GeneralCommandLine;
 import com.intellij.execution.configurations.LocatableConfigurationBase;
 import com.intellij.execution.configurations.RunConfiguration;
 import com.intellij.execution.configurations.RunProfileState;
 import com.intellij.execution.configurations.RuntimeConfigurationError;
 import com.intellij.execution.configurations.RuntimeConfigurationException;
+import com.intellij.execution.executors.DefaultRunExecutor;
+import com.intellij.execution.process.KillableColoredProcessHandler;
 import com.intellij.execution.process.ProcessHandler;
 import com.intellij.execution.process.ProcessOutputTypes;
 import com.intellij.execution.process.ProcessTerminatedListener;
@@ -18,6 +21,7 @@ import com.intellij.openapi.util.NlsActions;
 import com.intellij.openapi.util.text.StringUtil;
 import com.intellij.util.execution.ParametersListUtil;
 import com.rosegoldc.lang.LangException;
+import com.rosegoldc.lang.NativeRun;
 import com.rosegoldc.lang.Run;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -69,6 +73,14 @@ public final class RoseGoldRunConfiguration extends LocatableConfigurationBase<R
 
     void setStopOnEntry(boolean stopOnEntry) {
         getOptions().stopOnEntry = stopOnEntry;
+    }
+
+    public boolean isRunNative() {
+        return getOptions().runNative;
+    }
+
+    void setRunNative(boolean runNative) {
+        getOptions().runNative = runNative;
     }
 
     @Override
@@ -132,6 +144,9 @@ public final class RoseGoldRunConfiguration extends LocatableConfigurationBase<R
             protected @NotNull ProcessHandler startProcess() throws ExecutionException {
                 Launch launch = launch();
                 List<String> argv = programArgv(launch.file);
+                if (isRunNative() && DefaultRunExecutor.EXECUTOR_ID.equals(executor.getId())) {
+                    return startNative(launch, argv);
+                }
                 RoseGoldInterpProcessHandler handler = new RoseGoldInterpProcessHandler(
                         "RoseGold run " + launch.file,
                         h -> {
@@ -205,6 +220,31 @@ public final class RoseGoldRunConfiguration extends LocatableConfigurationBase<R
         }
         String base = getProject().getBasePath();
         return base == null ? null : Path.of(base);
+    }
+
+    @NotNull
+    private ProcessHandler startNative(@NotNull Launch launch, @NotNull List<String> argv) throws ExecutionException {
+        NativeRun.Result linked;
+        try {
+            linked = NativeRun.linkFile(launch.file, launch.workDir);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new ExecutionException("native link interrupted", ex);
+        } catch (IOException ex) {
+            throw new ExecutionException(ex.getMessage() == null ? "native link failed" : ex.getMessage(), ex);
+        }
+        if (!linked.ok || linked.exe == null) {
+            String msg = linked.message.isEmpty() ? "llvm --link failed" : linked.message.trim();
+            throw new ExecutionException(msg);
+        }
+        GeneralCommandLine cmd = new GeneralCommandLine(linked.exe.toAbsolutePath().toString());
+        cmd.addParameters(argv);
+        if (launch.workDir != null) {
+            cmd.setWorkDirectory(launch.workDir.toString());
+        }
+        KillableColoredProcessHandler handler = new KillableColoredProcessHandler(cmd);
+        ProcessTerminatedListener.attach(handler);
+        return handler;
     }
 
     static final class Launch {

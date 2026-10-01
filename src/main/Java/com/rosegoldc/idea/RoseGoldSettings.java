@@ -12,6 +12,7 @@ public final class RoseGoldSettings implements PersistentStateComponent<RoseGold
     public static final class State {
         public boolean formatCompact = false;
         public boolean formatStripComments = false;
+        public boolean runNative = true;
     }
 
     private State state = new State();
@@ -44,5 +45,13 @@ public final class RoseGoldSettings implements PersistentStateComponent<RoseGold
 
     public void setFormatStripComments(boolean strip) {
         state.formatStripComments = strip;
+    }
+
+    public boolean isRunNative() {
+        return state.runNative;
+    }
+
+    public void setRunNative(boolean runNative) {
+        state.runNative = runNative;
     }
 }

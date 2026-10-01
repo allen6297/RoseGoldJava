@@ -17,6 +17,7 @@ public final class RoseGoldRunSettingsEditor extends SettingsEditor<RoseGoldRunC
     private final TextFieldWithBrowseButton fileField = new TextFieldWithBrowseButton();
     private final JTextField argsField = new JTextField();
     private final JCheckBox stopOnEntryBox = new JCheckBox("Stop on entry");
+    private final JCheckBox nativeBox = new JCheckBox("Run natively (LLVM)");
 
     RoseGoldRunSettingsEditor(@NotNull Project project) {
         FileChooserDescriptor descriptor = new FileChooserDescriptor(true, false, false, false, false, false)
@@ -31,6 +32,7 @@ public final class RoseGoldRunSettingsEditor extends SettingsEditor<RoseGoldRunC
         return FormBuilder.createFormBuilder()
                 .addLabeledComponent("File:", fileField)
                 .addLabeledComponent("Arguments:", argsField)
+                .addComponent(nativeBox)
                 .addComponent(stopOnEntryBox)
                 .addComponentFillVertically(new JPanel(), 0)
                 .getPanel();
@@ -40,6 +42,7 @@ public final class RoseGoldRunSettingsEditor extends SettingsEditor<RoseGoldRunC
     protected void resetEditorFrom(@NotNull RoseGoldRunConfiguration configuration) {
         fileField.setText(configuration.getFilePath());
         argsField.setText(configuration.getProgramArguments());
+        nativeBox.setSelected(configuration.isRunNative());
         stopOnEntryBox.setSelected(configuration.isStopOnEntry());
     }
 
@@ -47,6 +50,7 @@ public final class RoseGoldRunSettingsEditor extends SettingsEditor<RoseGoldRunC
     protected void applyEditorTo(@NotNull RoseGoldRunConfiguration configuration) {
         configuration.setFilePath(fileField.getText().trim());
         configuration.setProgramArguments(argsField.getText());
+        configuration.setRunNative(nativeBox.isSelected());
         configuration.setStopOnEntry(stopOnEntryBox.isSelected());
     }
 }

@@ -13,4 +13,7 @@ public final class RoseGoldRunConfigurationOptions extends LocatableRunConfigura
 
     @Attribute("stopOnEntry")
     public boolean stopOnEntry = true;
+
+    @Attribute("runNative")
+    public boolean runNative = true;
 }

@@ -322,9 +322,8 @@ public final class Main {
         if (!outArg.isEmpty()) {
             out = cwd.resolve(outArg);
         } else if (run) {
-            Path tmp = Files.createTempDirectory("rg-llvm-run-");
-            tmp.toFile().deleteOnExit();
-            out = tmp.resolve(stem);
+            Path tmp = LlvmLink.runCacheDir();
+            out = tmp.resolve(stem + "-" + System.nanoTime());
         } else {
             out = cwd.resolve("build").resolve(stem);
         }
@@ -342,6 +341,10 @@ public final class Main {
         argv.addAll(extra);
         result = LlvmLink.exec(result.output, argv, result);
         System.out.print(result.stdout);
+        if (!result.ok && !result.message.isEmpty()
+                && (result.stdout.isEmpty() || !result.stdout.contains(result.message))) {
+            System.err.println(result.message.trim());
+        }
         if (!result.stdout.isEmpty() && !result.stdout.endsWith("\n") && result.exitCode != 0) {
             System.out.println();
         }

@@ -259,6 +259,23 @@ public class LlvmNativeTest {
     }
 
     @Test
+    public void hiddenWindowDraws() throws Exception {
+        assertNativeSource("""
+                fn main(): Int {
+                    var id = try __ui.open("rg", 80, 40, false);
+                    print(__ui.backend());
+                    print(__ui.width(id));
+                    __ui.fill(id, 0, 0, 10, 10, 255);
+                    __ui.text(id, 2, 2, "Hi", 0);
+                    __ui.present(id);
+                    __ui.close(id);
+                    print(__ui.alive(id));
+                    return 0;
+                }
+                """, "ui-draw.rg", LlvmLink.isWindows() ? "win32\n80\nfalse\n" : "headless\n80\nfalse\n");
+    }
+
+    @Test
     public void failingTestReports() throws Exception {
         assertNativeTestSource("""
                 @test
@@ -345,21 +362,10 @@ public class LlvmNativeTest {
 
     private static LlvmLink.Result execNative(Checker checker, Path nativeDir, String stem, List<String> argv,
             boolean test) throws Exception {
-        java.io.IOException blocked = null;
-        for (int i = 0; i < 3; i++) {
-            Path out = nativeOut(stem);
-            LlvmLink.Result linked = LlvmLink.link(checker, nativeDir, out, test);
-            assertTrue(linked.message, linked.ok);
-            try {
-                return LlvmLink.exec(linked.output, argv, linked);
-            } catch (java.io.IOException ex) {
-                blocked = ex;
-                if (ex.getMessage() == null || !ex.getMessage().contains("4551")) {
-                    throw ex;
-                }
-            }
-        }
-        throw blocked;
+        Path out = nativeOut(stem);
+        LlvmLink.Result linked = LlvmLink.link(checker, nativeDir, out, test);
+        assertTrue(linked.message, linked.ok);
+        return LlvmLink.exec(linked.output, argv, linked, null, java.util.Map.of("RG_UI_HEADLESS", "1"));
     }
 
     private static Path nativeOut(String stem) throws Exception {

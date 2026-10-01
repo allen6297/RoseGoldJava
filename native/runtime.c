@@ -11,6 +11,7 @@
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <windowsx.h>
 #include <direct.h>
 #include <io.h>
 #include <sys/stat.h>
@@ -156,6 +157,15 @@ typedef struct RGFrameJob {
     struct RGFrameJob *next;
 } RGFrameJob;
 
+#define RG_UI_CLIP_MAX 16
+
+typedef struct RGClip {
+    int32_t x0;
+    int32_t y0;
+    int32_t x1;
+    int32_t y1;
+} RGClip;
+
 typedef struct RGWin {
     int64_t id;
     int32_t alive;
@@ -173,7 +183,18 @@ typedef struct RGWin {
     int32_t key_code;
     int32_t sdx;
     int32_t sdy;
+    int32_t cursor;
+    int32_t wheel_acc;
     char *key_text;
+    int32_t nclips;
+    RGClip clips[RG_UI_CLIP_MAX];
+    int32_t fb_w;
+    int32_t fb_h;
+    uint32_t *fb;
+#if defined(_WIN32)
+    HWND hwnd;
+    int32_t dpi;
+#endif
     struct RGWin *next;
 } RGWin;
 
@@ -2519,310 +2540,7 @@ static int32_t rg_ui_bool(RGValue *args, int32_t i, int32_t argc) {
     return args[i].i != 0;
 }
 
-static void rg_ui_call(RGValue *dest, const char *name, RGValue *args, int32_t argc) {
-    RGWin *win;
-    if (dest == NULL) {
-        return;
-    }
-    if (name == NULL) {
-        name = "";
-    }
-    if (strcmp(name, "backend") == 0) {
-        rg_set_string(dest, "headless");
-        return;
-    }
-    if (strcmp(name, "platform") == 0) {
-#if defined(_WIN32)
-        rg_set_string(dest, "win32");
-#else
-        rg_set_string(dest, "linux");
-#endif
-        return;
-    }
-    if (strcmp(name, "count") == 0) {
-        int64_t n = 0;
-        for (win = g_wins; win != NULL; win = win->next) {
-            if (win->alive) {
-                n++;
-            }
-        }
-        rg_set_int(dest, n);
-        return;
-    }
-    if (strcmp(name, "font_height") == 0) {
-        rg_set_int(dest, 16);
-        return;
-    }
-    if (strcmp(name, "clipboard_get") == 0) {
-        rg_set_string(dest, g_clip != NULL ? g_clip : "");
-        return;
-    }
-    if (strcmp(name, "clipboard_set") == 0) {
-        g_clip = rg_strdup(rg_ui_str(args, 0, argc));
-        rg_set_void(dest);
-        return;
-    }
-    if (strcmp(name, "text_width") == 0) {
-        const char *s = rg_ui_str(args, 0, argc);
-        rg_set_int(dest, (int64_t) strlen(s) * 8);
-        return;
-    }
-    if (strcmp(name, "image_width") == 0 || strcmp(name, "image_height") == 0) {
-        rg_set_int(dest, 0);
-        return;
-    }
-    if (strcmp(name, "run") == 0) {
-        rg_set_void(dest);
-        return;
-    }
-    if (strcmp(name, "wait") == 0) {
-        for (win = g_wins; win != NULL; win = win->next) {
-            win->alive = 0;
-        }
-        rg_set_void(dest);
-        return;
-    }
-    if (strcmp(name, "open") == 0) {
-        const char *title;
-        int64_t w;
-        int64_t h;
-        RGValue err;
-        if (argc != 4) {
-            rg_die("__ui.open takes 4 arguments");
-        }
-        title = rg_ui_str(args, 0, argc);
-        w = rg_ui_int(args, 1, argc);
-        h = rg_ui_int(args, 2, argc);
-        if (w < 1 || h < 1 || w > RG_UI_MAX || h > RG_UI_MAX) {
-            rg_set_string(&err, "window size must be between 1 and 16384");
-            rg_throw(&err);
-            return;
-        }
-        if (title[0] == '\0') {
-            title = "RoseGold";
-        }
-        win = (RGWin *) calloc(1, sizeof(RGWin));
-        if (win == NULL) {
-            rg_die("out of memory");
-        }
-        win->id = g_next_win++;
-        win->alive = 1;
-        win->mapped = rg_ui_bool(args, 3, argc);
-        win->w = (int32_t) w;
-        win->h = (int32_t) h;
-        win->title = rg_strdup(title);
-        win->next = g_wins;
-        g_wins = win;
-        rg_set_int(dest, win->id);
-        return;
-    }
-    if (strcmp(name, "next_frame") == 0) {
-        RGFrameJob *job = (RGFrameJob *) malloc(sizeof(RGFrameJob));
-        RGFuture *fut;
-        if (job == NULL) {
-            rg_die("out of memory");
-        }
-        fut = rg_new_future();
-        job->win_id = rg_ui_int(args, 0, argc);
-        job->fut = fut;
-        job->next = g_frames;
-        g_frames = job;
-        rg_put_future(dest, fut);
-        return;
-    }
-    win = argc >= 1 && args != NULL && args[0].kind == RG_INT ? rg_ui_find(args[0].i) : NULL;
-    if (strcmp(name, "close") == 0) {
-        if (win != NULL) {
-            win->alive = 0;
-        }
-        rg_set_void(dest);
-        return;
-    }
-    if (strcmp(name, "alive") == 0 || strcmp(name, "poll") == 0) {
-        rg_set_bool(dest, win != NULL);
-        return;
-    }
-    if (strcmp(name, "show") == 0) {
-        if (win != NULL) {
-            win->mapped = 1;
-        }
-        rg_set_void(dest);
-        return;
-    }
-    if (strcmp(name, "hide") == 0) {
-        if (win != NULL) {
-            win->mapped = 0;
-        }
-        rg_set_void(dest);
-        return;
-    }
-    if (strcmp(name, "title") == 0) {
-        rg_set_string(dest, win != NULL && win->title != NULL ? win->title : "");
-        return;
-    }
-    if (strcmp(name, "set_title") == 0) {
-        if (win != NULL) {
-            const char *title = rg_ui_str(args, 1, argc);
-            free(win->title);
-            win->title = rg_strdup(title[0] == '\0' ? "RoseGold" : title);
-        }
-        rg_set_void(dest);
-        return;
-    }
-    if (strcmp(name, "width") == 0) {
-        rg_set_int(dest, win != NULL ? win->w : 0);
-        return;
-    }
-    if (strcmp(name, "height") == 0) {
-        rg_set_int(dest, win != NULL ? win->h : 0);
-        return;
-    }
-    if (strcmp(name, "set_size") == 0) {
-        int64_t w = rg_ui_int(args, 1, argc);
-        int64_t h = rg_ui_int(args, 2, argc);
-        if (w < 1 || h < 1 || w > RG_UI_MAX || h > RG_UI_MAX) {
-            rg_die("window size must be between 1 and 16384");
-        }
-        if (win != NULL) {
-            win->w = (int32_t) w;
-            win->h = (int32_t) h;
-        }
-        rg_set_void(dest);
-        return;
-    }
-    if (strcmp(name, "mouse_x") == 0) {
-        rg_set_int(dest, win != NULL ? win->mx : 0);
-        return;
-    }
-    if (strcmp(name, "mouse_y") == 0) {
-        rg_set_int(dest, win != NULL ? win->my : 0);
-        return;
-    }
-    if (strcmp(name, "mouse_down") == 0) {
-        rg_set_bool(dest, win != NULL && win->down);
-        return;
-    }
-    if (strcmp(name, "take_click") == 0) {
-        int32_t v = win != NULL && win->click;
-        if (win != NULL) {
-            win->click = 0;
-        }
-        rg_set_bool(dest, v);
-        return;
-    }
-    if (strcmp(name, "take_right_click") == 0) {
-        int32_t v = win != NULL && win->rclick;
-        if (win != NULL) {
-            win->rclick = 0;
-        }
-        rg_set_bool(dest, v);
-        return;
-    }
-    if (strcmp(name, "feed_click") == 0) {
-        if (win != NULL) {
-            win->mx = (int32_t) rg_ui_int(args, 1, argc);
-            win->my = (int32_t) rg_ui_int(args, 2, argc);
-            win->click = 1;
-        }
-        rg_set_void(dest);
-        return;
-    }
-    if (strcmp(name, "feed_right_click") == 0) {
-        if (win != NULL) {
-            win->mx = (int32_t) rg_ui_int(args, 1, argc);
-            win->my = (int32_t) rg_ui_int(args, 2, argc);
-            win->rclick = 1;
-        }
-        rg_set_void(dest);
-        return;
-    }
-    if (strcmp(name, "feed_mouse") == 0) {
-        if (win != NULL) {
-            win->mx = (int32_t) rg_ui_int(args, 1, argc);
-            win->my = (int32_t) rg_ui_int(args, 2, argc);
-        }
-        rg_set_void(dest);
-        return;
-    }
-    if (strcmp(name, "feed_down") == 0) {
-        if (win != NULL) {
-            win->down = rg_ui_bool(args, 1, argc);
-        }
-        rg_set_void(dest);
-        return;
-    }
-    if (strcmp(name, "take_key") == 0) {
-        int32_t v = win != NULL && win->keyp;
-        if (win != NULL) {
-            win->keyp = 0;
-        }
-        rg_set_bool(dest, v);
-        return;
-    }
-    if (strcmp(name, "key_code") == 0) {
-        rg_set_int(dest, win != NULL ? win->key_code : 0);
-        return;
-    }
-    if (strcmp(name, "key_text") == 0) {
-        rg_set_string(dest, win != NULL && win->key_text != NULL ? win->key_text : "");
-        return;
-    }
-    if (strcmp(name, "feed_key") == 0) {
-        if (win != NULL) {
-            win->key_code = (int32_t) rg_ui_int(args, 1, argc);
-            free(win->key_text);
-            win->key_text = rg_strdup(rg_ui_str(args, 2, argc));
-            win->keyp = 1;
-        }
-        rg_set_void(dest);
-        return;
-    }
-    if (strcmp(name, "take_scroll") == 0) {
-        int32_t v = win != NULL && win->scrollp;
-        if (win != NULL) {
-            win->scrollp = 0;
-        }
-        rg_set_bool(dest, v);
-        return;
-    }
-    if (strcmp(name, "scroll_dx") == 0) {
-        rg_set_int(dest, win != NULL ? win->sdx : 0);
-        return;
-    }
-    if (strcmp(name, "scroll_dy") == 0) {
-        rg_set_int(dest, win != NULL ? win->sdy : 0);
-        return;
-    }
-    if (strcmp(name, "feed_scroll") == 0) {
-        if (win != NULL) {
-            int32_t dx = (int32_t) rg_ui_int(args, 1, argc);
-            int32_t dy = (int32_t) rg_ui_int(args, 2, argc);
-            if (!win->scrollp) {
-                win->sdx = 0;
-                win->sdy = 0;
-            }
-            win->sdx += dx;
-            win->sdy += dy;
-            win->scrollp = 1;
-        }
-        rg_set_void(dest);
-        return;
-    }
-    if (strcmp(name, "set_frame") == 0) {
-        rg_set_void(dest);
-        return;
-    }
-    if (strcmp(name, "clear") == 0 || strcmp(name, "fill") == 0 || strcmp(name, "line") == 0
-            || strcmp(name, "stroke_rect") == 0 || strcmp(name, "fill_round") == 0
-            || strcmp(name, "stroke_round") == 0 || strcmp(name, "image_rgb") == 0
-            || strcmp(name, "image") == 0 || strcmp(name, "clip_push") == 0 || strcmp(name, "clip_pop") == 0
-            || strcmp(name, "text") == 0 || strcmp(name, "present") == 0 || strcmp(name, "cursor") == 0) {
-        rg_set_void(dest);
-        return;
-    }
-    fprintf(stderr, "unknown function __ui.%s\n", name);
-    exit(1);
-}
+#include "host_ui.c"
 
 void rg_set_argv(int32_t argc, char **argv) {
     if (argc > 0 && argv != NULL) {
