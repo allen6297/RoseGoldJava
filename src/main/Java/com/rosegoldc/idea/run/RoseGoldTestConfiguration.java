@@ -4,11 +4,14 @@ import com.rosegoldc.idea.RoseGold;
 import com.intellij.execution.ExecutionException;
 import com.intellij.execution.Executor;
 import com.intellij.execution.configurations.CommandLineState;
+import com.intellij.execution.configurations.GeneralCommandLine;
 import com.intellij.execution.configurations.LocatableConfigurationBase;
 import com.intellij.execution.configurations.RunConfiguration;
 import com.intellij.execution.configurations.RunProfileState;
 import com.intellij.execution.configurations.RuntimeConfigurationError;
 import com.intellij.execution.configurations.RuntimeConfigurationException;
+import com.intellij.execution.executors.DefaultRunExecutor;
+import com.intellij.execution.process.KillableColoredProcessHandler;
 import com.intellij.execution.process.ProcessHandler;
 import com.intellij.execution.process.ProcessOutputTypes;
 import com.intellij.execution.process.ProcessTerminatedListener;
@@ -28,6 +31,7 @@ import com.intellij.openapi.util.Key;
 import com.intellij.openapi.util.NlsActions;
 import com.intellij.openapi.util.text.StringUtil;
 import com.rosegoldc.lang.LangException;
+import com.rosegoldc.lang.NativeRun;
 import com.rosegoldc.lang.Run;
 import com.rosegoldc.lang.Tests;
 import jetbrains.buildServer.messages.serviceMessages.ServiceMessageVisitor;
@@ -64,6 +68,14 @@ public final class RoseGoldTestConfiguration extends LocatableConfigurationBase<
 
     void setFilePath(@Nullable String path) {
         getOptions().filePath = path == null ? "" : path;
+    }
+
+    boolean isRunNative() {
+        return getOptions().runNative;
+    }
+
+    void setRunNative(boolean runNative) {
+        getOptions().runNative = runNative;
     }
 
     @Override
@@ -136,6 +148,13 @@ public final class RoseGoldTestConfiguration extends LocatableConfigurationBase<
             protected @NotNull ProcessHandler startProcess() throws ExecutionException {
                 Path target = resolvedTarget();
                 Path work = workDirectory(target);
+                if (isRunNative() && DefaultRunExecutor.EXECUTOR_ID.equals(executor.getId())) {
+                    Path nativeFile = nativeTestFile(target);
+                    if (nativeFile != null) {
+                        return startNative(nativeFile, work);
+                    }
+                    return startNativeSuite(target, work);
+                }
                 String label = target == null ? "language suite" : target.toString();
                 RoseGoldInterpProcessHandler handler = new RoseGoldInterpProcessHandler(
                         "RoseGold test " + label,
@@ -196,6 +215,92 @@ public final class RoseGoldTestConfiguration extends LocatableConfigurationBase<
             return target;
         }
         return target.getParent();
+    }
+
+    @Nullable
+    private Path nativeTestFile(@Nullable Path target) throws ExecutionException {
+        if (target == null || Files.isDirectory(target)) {
+            return null;
+        }
+        if (com.rosegoldc.lang.Project.isProjectFile(target)) {
+            try {
+                Path tests = com.rosegoldc.lang.Project.load(target).testTarget();
+                if (Files.isRegularFile(tests) && tests.toString().toLowerCase().endsWith(".rg")) {
+                    return tests.toAbsolutePath().normalize();
+                }
+            } catch (LangException ex) {
+                throw new ExecutionException(ex.diagnostic.toHuman(), ex);
+            } catch (IOException ex) {
+                throw new ExecutionException("cannot read " + target, ex);
+            }
+            return null;
+        }
+        if (target.toString().toLowerCase().endsWith(".rg")) {
+            return target;
+        }
+        return null;
+    }
+
+    @NotNull
+    private ProcessHandler startNative(@NotNull Path file, @Nullable Path workDir) throws ExecutionException {
+        NativeRun.Result linked;
+        try {
+            linked = NativeRun.linkFile(file, workDir, true);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new ExecutionException("native link interrupted", ex);
+        } catch (IOException ex) {
+            throw new ExecutionException(ex.getMessage() == null ? "native link failed" : ex.getMessage(), ex);
+        }
+        if (linked.exe == null) {
+            String msg = linked.message.isEmpty() ? "llvm --test --run failed" : linked.message.trim();
+            if (linked.ok) {
+                RoseGoldInterpProcessHandler handler = new RoseGoldInterpProcessHandler(
+                        "RoseGold test " + file,
+                        h -> {
+                            h.notifyTextAvailable(msg + "\n", ProcessOutputTypes.SYSTEM);
+                            return 0;
+                        }
+                );
+                ProcessTerminatedListener.attach(handler);
+                return handler;
+            }
+            throw new ExecutionException(msg);
+        }
+        GeneralCommandLine cmd = new GeneralCommandLine(linked.exe.toAbsolutePath().toString());
+        cmd.addParameter(file.toAbsolutePath().toString());
+        if (workDir != null) {
+            cmd.setWorkDirectory(workDir.toString());
+        }
+        KillableColoredProcessHandler handler = new KillableColoredProcessHandler(cmd);
+        ProcessTerminatedListener.attach(handler);
+        return handler;
+    }
+
+    @NotNull
+    private ProcessHandler startNativeSuite(@Nullable Path target, @Nullable Path workDir) {
+        String label = target == null ? "language suite" : target.toString();
+        RoseGoldInterpProcessHandler handler = new RoseGoldInterpProcessHandler(
+                "RoseGold native test " + label,
+                h -> {
+                    try {
+                        Run.Result result = Run.testPath(target, workDir, text ->
+                                h.notifyTextAvailable(text, ProcessOutputTypes.STDOUT), true);
+                        if (!result.ok && !result.message.isEmpty() && !result.out.contains(result.message)) {
+                            h.notifyTextAvailable(result.message + "\n", ProcessOutputTypes.STDERR);
+                        }
+                        if (result.ok && result.out.isEmpty() && !result.message.isEmpty()) {
+                            h.notifyTextAvailable(result.message + "\n", ProcessOutputTypes.SYSTEM);
+                        }
+                        return result.exitCode;
+                    } catch (IOException ex) {
+                        h.notifyTextAvailable(ex.getMessage() + "\n", ProcessOutputTypes.STDERR);
+                        return 1;
+                    }
+                }
+        );
+        ProcessTerminatedListener.attach(handler);
+        return handler;
     }
 
     static final class Properties extends SMTRunnerConsoleProperties implements SMCustomMessagesParsing {

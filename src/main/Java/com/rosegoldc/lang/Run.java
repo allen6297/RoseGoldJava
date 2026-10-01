@@ -83,6 +83,29 @@ public final class Run {
     }
 
     public static Result testFile(Path path, Path workDir, Consumer<String> onOut) throws IOException {
+        return testFile(path, workDir, onOut, false);
+    }
+
+    public static Result testFile(Path path, Path workDir, Consumer<String> onOut, boolean nativeRun) throws IOException {
+        if (nativeRun) {
+            try {
+                NativeRun.Result nativeResult = NativeRun.execFile(path, List.of(path.toString()), workDir, true);
+                if (!nativeResult.notLowered()) {
+                    Result result = new Result();
+                    result.ok = nativeResult.ok;
+                    result.exitCode = nativeResult.exitCode;
+                    result.out = nativeResult.out;
+                    result.message = nativeResult.message;
+                    if (onOut != null && !nativeResult.out.isEmpty()) {
+                        onOut.accept(nativeResult.out);
+                    }
+                    return result;
+                }
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                return fail("native test interrupted");
+            }
+        }
         String source = Files.readString(path, StandardCharsets.UTF_8);
         return testSource(source, path.toString(), workDir, onOut);
     }
@@ -152,26 +175,30 @@ public final class Run {
     }
 
     public static Result testPath(Path path, Path workDir, Consumer<String> onOut) throws IOException {
+        return testPath(path, workDir, onOut, false);
+    }
+
+    public static Result testPath(Path path, Path workDir, Consumer<String> onOut, boolean nativeRun) throws IOException {
         if (path == null) {
             Path root = workDir != null ? workDir : Path.of("");
             Path toml = root.resolve("project.toml");
             if (Files.isRegularFile(toml)) {
-                return testProject(Project.load(toml), onOut);
+                return testProject(Project.load(toml), onOut, nativeRun);
             }
-            return testLanguage(root, onOut);
+            return testLanguage(root, onOut, nativeRun);
         }
         if (Files.isRegularFile(path) && Project.isProjectFile(path)) {
-            return testProject(Project.load(path), onOut);
+            return testProject(Project.load(path), onOut, nativeRun);
         }
         if (Files.isDirectory(path)) {
             Path toml = path.resolve("project.toml");
             boolean suite = Files.isDirectory(path.resolve("pass")) || Files.isDirectory(path.resolve("fail"));
             if (!suite && Files.isRegularFile(toml)) {
-                return testProject(Project.load(toml), onOut);
+                return testProject(Project.load(toml), onOut, nativeRun);
             }
-            return testSuite(path, onOut);
+            return testSuite(path, onOut, nativeRun);
         }
-        return testFile(path, workDir, onOut);
+        return testFile(path, workDir, onOut, nativeRun);
     }
 
     public static Result testProject(Project project) throws IOException {
@@ -179,6 +206,10 @@ public final class Run {
     }
 
     public static Result testProject(Project project, Consumer<String> onOut) throws IOException {
+        return testProject(project, onOut, false);
+    }
+
+    public static Result testProject(Project project, Consumer<String> onOut, boolean nativeRun) throws IOException {
         if (project == null) {
             return fail("no project.toml");
         }
@@ -190,9 +221,9 @@ public final class Run {
             return fail("no tests found (tests.rg, tests/, or @test in " + project.entry + ")");
         }
         if (Files.isDirectory(target)) {
-            return testSuite(target, onOut);
+            return testSuite(target, onOut, nativeRun);
         }
-        return testFile(target, project.dir, onOut);
+        return testFile(target, project.dir, onOut, nativeRun);
     }
 
     public static Result testLanguage(Path root) {
@@ -200,6 +231,10 @@ public final class Run {
     }
 
     public static Result testLanguage(Path root, Consumer<String> onOut) {
+        return testLanguage(root, onOut, false);
+    }
+
+    public static Result testLanguage(Path root, Consumer<String> onOut, boolean nativeRun) {
         Path base = root == null ? Path.of("") : root;
         Path unit = base.resolve("examples").resolve("tests.rg");
         Path suite = base.resolve("tests");
@@ -213,7 +248,7 @@ public final class Run {
         StringBuilder out = new StringBuilder();
         if (hasUnit) {
             try {
-                Result unitResult = testFile(unit, base, onOut);
+                Result unitResult = testFile(unit, base, onOut, nativeRun);
                 out.append(unitResult.out);
                 if (!unitResult.ok) {
                     result.ok = false;
@@ -228,7 +263,7 @@ public final class Run {
             }
         }
         if (hasSuite) {
-            Result files = testSuite(suite, onOut);
+            Result files = testSuite(suite, onOut, nativeRun);
             out.append(files.out);
             if (!files.ok) {
                 result.ok = false;
@@ -247,6 +282,10 @@ public final class Run {
     }
 
     public static Result testSuite(Path root, Consumer<String> onOut) {
+        return testSuite(root, onOut, false);
+    }
+
+    public static Result testSuite(Path root, Consumer<String> onOut, boolean nativeRun) {
         if (root == null || !Files.isDirectory(root)) {
             return fail("no test directory " + root);
         }
@@ -254,7 +293,7 @@ public final class Run {
         int total = 0;
         StringBuilder out = new StringBuilder();
         for (Path path : listRgFiles(root.resolve("pass"))) {
-            PassCheck check = checkPass(path);
+            PassCheck check = checkPass(path, nativeRun);
             if (check.skipped) {
                 continue;
             }
@@ -265,7 +304,7 @@ public final class Run {
             }
         }
         for (Path path : listRgFiles(root.resolve("fail"))) {
-            PassCheck check = checkFail(path);
+            PassCheck check = checkFail(path, nativeRun);
             if (check.skipped) {
                 continue;
             }
@@ -296,7 +335,7 @@ public final class Run {
         }
     }
 
-    private static PassCheck checkPass(Path path) {
+    private static PassCheck checkPass(Path path, boolean nativeRun) {
         String name = path.toString().replace('\\', '/');
         try {
             String source = Files.readString(path, StandardCharsets.UTF_8);
@@ -311,7 +350,7 @@ public final class Run {
         }
         PassCheck check = new PassCheck();
         try {
-            Result r = runFile(path, List.of(path.toString()), Path.of("").toAbsolutePath(), null);
+            Result r = runMaybeNative(path, nativeRun);
             if (r.ok && r.exitCode == 0) {
                 check.ok = true;
                 check.line = "ok   " + name + "\n";
@@ -329,7 +368,7 @@ public final class Run {
         }
     }
 
-    private static PassCheck checkFail(Path path) {
+    private static PassCheck checkFail(Path path, boolean nativeRun) {
         String name = path.toString().replace('\\', '/');
         PassCheck check = new PassCheck();
         String source;
@@ -345,7 +384,7 @@ public final class Run {
             return check;
         }
         try {
-            Result r = runFile(path, List.of(path.toString()), Path.of("").toAbsolutePath(), null);
+            Result r = runMaybeNative(path, nativeRun);
             boolean didFail = !r.ok || r.exitCode != 0;
             String got = r.message.isEmpty() ? r.out : r.message;
             if (!didFail) {
@@ -363,6 +402,27 @@ public final class Run {
             check.line = "FAIL " + name + ": " + ex.getMessage() + "\n";
             return check;
         }
+    }
+
+    private static Result runMaybeNative(Path path, boolean nativeRun) throws IOException {
+        if (nativeRun) {
+            try {
+                NativeRun.Result nativeResult = NativeRun.execFile(
+                        path, List.of(path.toString()), Path.of("").toAbsolutePath(), false);
+                if (!nativeResult.notLowered()) {
+                    Result result = new Result();
+                    result.ok = nativeResult.ok;
+                    result.exitCode = nativeResult.exitCode;
+                    result.out = nativeResult.out;
+                    result.message = nativeResult.message;
+                    return result;
+                }
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                return fail("native test interrupted");
+            }
+        }
+        return runFile(path, List.of(path.toString()), Path.of("").toAbsolutePath(), null);
     }
 
     private static String readExpect(String source) {

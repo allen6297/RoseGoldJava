@@ -23,7 +23,7 @@ public final class RoseGoldConfigurable implements Configurable {
     public @Nullable JComponent createComponent() {
         compactBox = new JCheckBox("Compact (no blank lines between top-level items)");
         stripCommentsBox = new JCheckBox("Strip comments when formatting");
-        nativeBox = new JCheckBox("Run natively (LLVM / clang)");
+        nativeBox = new JCheckBox("Run and test natively (LLVM / clang)");
         return FormBuilder.createFormBuilder()
                 .addComponent(compactBox)
                 .addComponent(stripCommentsBox)

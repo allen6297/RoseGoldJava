@@ -13,6 +13,20 @@ import static org.junit.Assert.assertTrue;
 public class EvalTest {
 
     @Test
+    public void nestedPrivateHelper() throws Exception {
+        Run.Result result = Run.runFile(Path.of("tests/pass/nested_ok.rg"), List.of("tests/pass/nested_ok.rg"));
+        assertTrue(result.message, result.ok);
+        assertEquals(0, result.exitCode);
+    }
+
+    @Test
+    public void importNamedPrivateHelper() throws Exception {
+        Run.Result result = Run.runFile(Path.of("tests/pass/import_named.rg"), List.of("tests/pass/import_named.rg"));
+        assertTrue(result.message, result.ok);
+        assertEquals(0, result.exitCode);
+    }
+
+    @Test
     public void helloPrints() {
         Run.Result result = Run.runSource("""
                 fn main(): Int {

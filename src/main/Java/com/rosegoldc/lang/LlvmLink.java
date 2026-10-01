@@ -195,15 +195,17 @@ final class LlvmLink {
     static boolean isNativeDir(Path dir) {
         return dir != null && Files.isRegularFile(dir.resolve("runtime.c"))
                 && Files.isRegularFile(dir.resolve("host_ui.c"))
+                && Files.isRegularFile(dir.resolve("host_img.c"))
                 && Files.isRegularFile(dir.resolve("rg_value.h"));
     }
 
     static List<String> clangCommand(Path clang, Path irFile, Path runtimeC, Path output) {
         List<String> cmd = new ArrayList<>();
         cmd.add(clang.toString());
-        cmd.add("-std=c11");
-        cmd.add("-O0");
-        cmd.add("-Wno-override-module");
+            cmd.add("-std=c11");
+            cmd.add("-O0");
+            cmd.add("-g");
+            cmd.add("-Wno-override-module");
         cmd.add("-o");
         cmd.add(output.toString());
         cmd.add(irFile.toString());
@@ -211,6 +213,9 @@ final class LlvmLink {
         if (isWindows()) {
             cmd.add("-luser32");
             cmd.add("-lgdi32");
+            cmd.add("-lole32");
+            cmd.add("-luuid");
+            cmd.add("-lwindowscodecs");
         } else {
             cmd.add("-lm");
         }

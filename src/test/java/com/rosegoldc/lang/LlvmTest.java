@@ -28,6 +28,10 @@ public class LlvmTest {
         assertTrue(ir, ir.contains("call void @rg_set_int("));
         assertTrue(ir, ir.contains("hello from RoseGold"));
         assertTrue(ir, ir.contains("call i64 @rg_to_exit("));
+        assertTrue(ir, ir.contains("!DICompileUnit("));
+        assertTrue(ir, ir.contains("!DISubprogram("));
+        assertTrue(ir, ir.contains("!DILocation("));
+        assertTrue(ir, ir.contains("!dbg !"));
         assertFalse(ir, ir.contains("{ not lowered to llvm }"));
     }
 
@@ -534,11 +538,13 @@ public class LlvmTest {
                 Path.of("native", "runtime.c"),
                 Path.of("out"));
         assertTrue(cmd.toString(), cmd.contains("-std=c11"));
+        assertTrue(cmd.toString(), cmd.contains("-g"));
         assertTrue(cmd.toString(), cmd.contains("-Wno-override-module"));
         assertTrue(cmd.toString(), cmd.stream().anyMatch(s -> s.replace('\\', '/').endsWith("native/runtime.c")));
         if (LlvmLink.isWindows()) {
             assertTrue(cmd.toString(), cmd.contains("-luser32"));
             assertTrue(cmd.toString(), cmd.contains("-lgdi32"));
+            assertTrue(cmd.toString(), cmd.contains("-lwindowscodecs"));
         } else {
             assertTrue(cmd.toString(), cmd.contains("-lm"));
         }

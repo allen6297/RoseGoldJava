@@ -259,6 +259,42 @@ public class LlvmNativeTest {
     }
 
     @Test
+    public void nestedOkExample() throws Exception {
+        assertNative("tests/pass/nested_ok.rg", "");
+    }
+
+    @Test
+    public void importNamedExample() throws Exception {
+        assertNative("tests/pass/import_named.rg", "");
+    }
+
+    @Test
+    public void svgImageSize() throws Exception {
+        assertNativeSource("""
+                fn main(): Int {
+                    print(__ui.image_width("examples/assets/dot.svg"));
+                    print(__ui.image_height("examples/assets/dot.svg"));
+                    return 0;
+                }
+                """, "img-svg.rg", "16\n16\n");
+    }
+
+    @Test
+    public void rasterImageSize() throws Exception {
+        assertNativeSource("""
+                fn main(): Int {
+                    print(__ui.image_width("examples/assets/dot.png"));
+                    print(__ui.image_height("examples/assets/dot.png"));
+                    print(__ui.image_width("examples/assets/dot.bmp"));
+                    print(__ui.image_height("examples/assets/dot.bmp"));
+                    print(__ui.image_width("examples/assets/dot.jpg") >= 1);
+                    print(__ui.image_height("examples/assets/dot.jpg") >= 1);
+                    return 0;
+                }
+                """, "img-raster.rg", "16\n16\n2\n2\ntrue\ntrue\n");
+    }
+
+    @Test
     public void hiddenWindowDraws() throws Exception {
         assertNativeSource("""
                 fn main(): Int {
@@ -365,7 +401,8 @@ public class LlvmNativeTest {
         Path out = nativeOut(stem);
         LlvmLink.Result linked = LlvmLink.link(checker, nativeDir, out, test);
         assertTrue(linked.message, linked.ok);
-        return LlvmLink.exec(linked.output, argv, linked, null, java.util.Map.of("RG_UI_HEADLESS", "1"));
+        return LlvmLink.exec(linked.output, argv, linked, Path.of("").toAbsolutePath(),
+                java.util.Map.of("RG_UI_HEADLESS", "1"));
     }
 
     private static Path nativeOut(String stem) throws Exception {

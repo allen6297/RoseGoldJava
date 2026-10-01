@@ -1060,7 +1060,11 @@ final class Interp {
         if (mod == null) {
             throw runtime("unknown function " + modName + "." + name, line, col);
         }
-        FnDecl fn = mod.exports.get(name);
+        boolean internal = checker.currentModule.equals(modName);
+        FnDecl fn = internal ? mod.fns.get(name) : mod.exports.get(name);
+        if (fn == null && internal) {
+            fn = mod.fromFns.get(name);
+        }
         if (fn == null) {
             throw runtime("module '" + modName + "' has no export '" + name + "'", line, col);
         }

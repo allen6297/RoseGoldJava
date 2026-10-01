@@ -7,4 +7,7 @@ public final class RoseGoldTestConfigurationOptions extends LocatableRunConfigur
 
     @Attribute("filePath")
     public String filePath = "";
+
+    @Attribute("runNative")
+    public boolean runNative = true;
 }

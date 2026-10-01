@@ -2,6 +2,7 @@ package com.rosegoldc.idea.run;
 
 import com.rosegoldc.idea.RoseGoldFileType;
 import com.rosegoldc.idea.RoseGoldProjects;
+import com.rosegoldc.idea.RoseGoldSettings;
 import com.rosegoldc.idea.psi.RoseGoldFile;
 import com.intellij.execution.actions.ConfigurationContext;
 import com.intellij.execution.actions.ConfigurationFromContext;
@@ -35,6 +36,7 @@ public final class RoseGoldTestConfigurationProducer extends LazyRunConfiguratio
             return false;
         }
         configuration.setFilePath(file.getPath());
+        configuration.setRunNative(RoseGoldSettings.getInstance().isRunNative());
         configuration.setGeneratedName();
         PsiElement location = context.getPsiLocation();
         if (location != null) {

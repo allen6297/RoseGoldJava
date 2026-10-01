@@ -10,7 +10,7 @@ Open a `.rg` file in IntelliJ IDEA 2025.3+ after **Run IDE with Plugin** (`./gra
 - Format Document, structure view, breadcrumbs, inlay hints, signature help
 - Color chips, Alt+Enter quick fixes, live templates
 - Run `fn main` and `@test` from the gutter; `project.toml` Run/Test uses `entry` / `[profile.test]`
-- Run uses native LLVM (`clang`) by default; Debug still uses the in-process interpreter
+- Run and Test use native LLVM (`clang`) by default for `.rg` files; Debug and the pass/fail language suite still use the in-process interpreter
 - Debug: breakpoints, stepping, watches (in-process, not DAP)
 - Standard library is bundled; a project-local `builtin/std` still wins
 
@@ -34,6 +34,7 @@ Java 21. From the repo root:
 ./gradlew rg --args="fmt examples/project.toml"
 ./gradlew rg --args="fmt --check examples"
 ./gradlew rg --args="test"
+./gradlew rg --args="test --native tests"
 ./gradlew rg --args="test tests"
 ./gradlew rg --args="test examples/project.toml"
 ./gradlew rg --args="new tmp-app"
@@ -52,7 +53,7 @@ Aliases: first letter, `-letter`, `--letter`. No arguments starts a `rosegold ` 
 | `run [file] [args...]` | Call `main`. No file (or `project.toml`) uses `[project].entry`. Extra args are `argv`. |
 | `check [--json] [--stdin] [file\|dir]` | Parse and typecheck. `--json` prints diagnostics. No file uses `[project].entry`. A directory checks every `.rg` file. |
 | `fmt [--write\|-w] [--check] [--compact] [--no-comments] [file\|dir]` | Format to stdout, or rewrite the file. No file (or `project.toml`) uses `[project].entry`. A directory formats every `.rg` file (writes unless `--check`). |
-| `test [file\|dir]` | `@test` functions, a pass/fail suite directory, or `project.toml` `[profile.test]`. No args: project tests, or `examples/tests.rg` plus `tests/pass` and `tests/fail`. |
+| `test [--native] [file\|dir]` | `@test` functions, a pass/fail suite directory, or `project.toml` `[profile.test]`. `--native` uses LLVM (falls back to the interpreter if a file is not lowered). No args: project tests, or `examples/tests.rg` plus `tests/pass` and `tests/fail`. |
 | `new [dir]` | Write `project.toml`, `main.rg`, and `tests.rg`. No dir uses the current directory. Fails if `project.toml` already exists. |
 | `new module <name>` | Create `<name>/lib.rg` and add it to `[modules]`. Needs a `project.toml`. |
 | `ir [file]` | Print register IR for entry functions. Unsupported constructs stay `{ tree-walk }`. |
@@ -67,7 +68,9 @@ Language samples live under `examples/` (`hello.rg`, `enum.rg`, `generics.rg`, `
 
 `std.ui` opens real OS windows (Swing in the interpreter; Win32 in `llvm --run`). Tests that should not show a frame use `ui.open_hidden`. Native UI tests set `RG_UI_HEADLESS=1` so `Window.run` exits without a message pump.
 
-Native LLVM needs **clang** (LLVM 15+) on PATH, `CLANG`, or `C:\Program Files\LLVM\bin`. Windows links `user32` and `gdi32`.
+Native LLVM needs **clang** (LLVM 15+) on PATH, `CLANG`, or `C:\Program Files\LLVM\bin`. Windows links `user32`, `gdi32`, `ole32`, `uuid`, and `windowscodecs` (PNG/JPG/BMP via WIC; a small SVG subset for `rect`/`circle`). Image paths are relative to the process working directory. Linked natives include DWARF (`clang -g` plus `!dbg` in the IR); the plugin Debug action still uses the in-process interpreter.
+
+Project status and leftover work: [TASKS.md](TASKS.md).
 
 ## Layout
 

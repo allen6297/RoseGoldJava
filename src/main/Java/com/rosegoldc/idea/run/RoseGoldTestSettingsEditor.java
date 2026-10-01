@@ -16,6 +16,7 @@ import javax.swing.*;
 public final class RoseGoldTestSettingsEditor extends SettingsEditor<RoseGoldTestConfiguration> {
 
     private final TextFieldWithBrowseButton fileField = new TextFieldWithBrowseButton();
+    private final JCheckBox nativeBox = new JCheckBox("Run natively (LLVM)");
 
     RoseGoldTestSettingsEditor(@NotNull Project project) {
         FileChooserDescriptor descriptor = new FileChooserDescriptor(true, true, false, false, false, false)
@@ -30,7 +31,9 @@ public final class RoseGoldTestSettingsEditor extends SettingsEditor<RoseGoldTes
     protected @NotNull JComponent createEditor() {
         return FormBuilder.createFormBuilder()
                 .addLabeledComponent("File or directory:", fileField)
+                .addComponent(nativeBox)
                 .addComponent(new JLabel("Leave empty to run the language suite (examples/tests.rg and tests/)."))
+                .addComponent(new JLabel("Native LLVM applies to .rg files, project.toml test entries, and pass/fail directories (falls back to the interpreter if a file is not lowered)."))
                 .addComponentFillVertically(new JPanel(), 0)
                 .getPanel();
     }
@@ -38,10 +41,12 @@ public final class RoseGoldTestSettingsEditor extends SettingsEditor<RoseGoldTes
     @Override
     protected void resetEditorFrom(@NotNull RoseGoldTestConfiguration configuration) {
         fileField.setText(configuration.getFilePath());
+        nativeBox.setSelected(configuration.isRunNative());
     }
 
     @Override
     protected void applyEditorTo(@NotNull RoseGoldTestConfiguration configuration) {
         configuration.setFilePath(fileField.getText().trim());
+        configuration.setRunNative(nativeBox.isSelected());
     }
 }

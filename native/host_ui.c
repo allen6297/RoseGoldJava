@@ -983,6 +983,8 @@ static void rg_ui_clipboard_set_os(const char *s) {
 
 #endif
 
+#include "host_img.c"
+
 static void rg_ui_kill_all(void) {
     RGWin *win;
     for (win = g_wins; win != NULL; win = win->next) {
@@ -1050,8 +1052,14 @@ static void rg_ui_call(RGValue *dest, const char *name, RGValue *args, int32_t a
         rg_set_int(dest, rg_ui_text_width(rg_ui_str(args, 0, argc)));
         return;
     }
-    if (strcmp(name, "image_width") == 0 || strcmp(name, "image_height") == 0) {
-        rg_set_int(dest, 0);
+    if (strcmp(name, "image_width") == 0) {
+        RGImg *img = rg_ui_img(rg_ui_str(args, 0, argc));
+        rg_set_int(dest, img == NULL ? 0 : img->w);
+        return;
+    }
+    if (strcmp(name, "image_height") == 0) {
+        RGImg *img = rg_ui_img(rg_ui_str(args, 0, argc));
+        rg_set_int(dest, img == NULL ? 0 : img->h);
         return;
     }
     if (strcmp(name, "run") == 0) {
@@ -1411,6 +1419,10 @@ static void rg_ui_call(RGValue *dest, const char *name, RGValue *args, int32_t a
         return;
     }
     if (strcmp(name, "image") == 0) {
+        if (win != NULL) {
+            rg_ui_blit_img(win, (int32_t) rg_ui_int(args, 1, argc), (int32_t) rg_ui_int(args, 2, argc),
+                    rg_ui_img(rg_ui_str(args, 3, argc)));
+        }
         rg_set_void(dest);
         return;
     }

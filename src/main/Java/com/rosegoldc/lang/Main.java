@@ -157,9 +157,7 @@ public final class Main {
         printAliases("fmt");
         System.out.println("      fmt [--write|-w] [--check] [--compact] [--no-comments] [file|dir]");
         printAliases("test");
-        System.out.println("      test            project tests, or language suite");
-        System.out.println("      test <file>     @test functions, or project.toml");
-        System.out.println("      test <dir>      pass/ and fail/, or project.toml");
+        System.out.println("      test [--native] [file|dir]");
         printAliases("new");
         System.out.println("      new [dir]");
         System.out.println("      new module <name>");
@@ -339,7 +337,7 @@ public final class Main {
         List<String> argv = new ArrayList<>();
         argv.add(file.toString());
         argv.addAll(extra);
-        result = LlvmLink.exec(result.output, argv, result);
+        result = LlvmLink.exec(result.output, argv, result, cwd, null);
         System.out.print(result.stdout);
         if (!result.ok && !result.message.isEmpty()
                 && (result.stdout.isEmpty() || !result.stdout.contains(result.message))) {
@@ -498,25 +496,37 @@ public final class Main {
     }
 
     static int testProgram(List<String> args, Path cwd) throws Exception {
-        if (args.size() > 1) {
-            System.err.println("Usage: test [file|dir]");
+        if (args.size() > 2) {
+            System.err.println("Usage: test [--native] [file|dir]");
             return 2;
         }
-        Run.Result result;
-        if (args.isEmpty()) {
-            Path toml = cwd.resolve("project.toml");
-            if (Files.isRegularFile(toml)) {
-                result = Run.testProject(Project.load(toml));
+        boolean nativeRun = false;
+        String pathArg = "";
+        for (String a : args) {
+            if (a.equals("--native")) {
+                nativeRun = true;
+            } else if (pathArg.isEmpty()) {
+                pathArg = a;
             } else {
-                result = Run.testLanguage(cwd);
-            }
-        } else {
-            Path target = cwd.resolve(args.getFirst()).normalize();
-            if (!Files.exists(target)) {
-                System.err.println("cannot open " + args.getFirst());
+                System.err.println("Usage: test [--native] [file|dir]");
                 return 2;
             }
-            result = Run.testPath(target, cwd, null);
+        }
+        Run.Result result;
+        if (pathArg.isEmpty()) {
+            Path toml = cwd.resolve("project.toml");
+            if (Files.isRegularFile(toml)) {
+                result = Run.testProject(Project.load(toml), null, nativeRun);
+            } else {
+                result = Run.testLanguage(cwd, null, nativeRun);
+            }
+        } else {
+            Path target = cwd.resolve(pathArg).normalize();
+            if (!Files.exists(target)) {
+                System.err.println("cannot open " + pathArg);
+                return 2;
+            }
+            result = Run.testPath(target, cwd, null, nativeRun);
         }
         printRunResult(result);
         return result.exitCode;

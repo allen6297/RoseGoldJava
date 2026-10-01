@@ -1,6 +1,7 @@
 package com.rosegoldc.lang;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
@@ -112,6 +113,7 @@ final class Llvm {
             }
         }
         Lambdas lambdas = collectLambdas(checker, sel);
+        Dbg dbg = new Dbg(checker.file);
         for (FnDecl lam : lambdas.order) {
             if (lam.code != null) {
                 collectStrings(lam.code, strings);
@@ -167,7 +169,7 @@ final class Llvm {
                 }
                 continue;
             }
-            emitFn(ir, fn.code, strings, mangle(fn.name), checker, layouts, lambdas, fn.code.arity);
+            emitFn(ir, fn.code, strings, mangle(fn.name), checker, layouts, lambdas, fn.code.arity, dbg, fn);
             ir.append('\n');
         }
         for (String key : sel.modFns) {
@@ -178,7 +180,7 @@ final class Llvm {
             int split = key.lastIndexOf('.');
             String module = split < 0 ? "" : key.substring(0, split);
             String name = split < 0 ? key : key.substring(split + 1);
-            emitFn(ir, fn.code, strings, mangleMod(module, name), checker, layouts, lambdas, fn.code.arity);
+            emitFn(ir, fn.code, strings, mangleMod(module, name), checker, layouts, lambdas, fn.code.arity, dbg, fn);
             ir.append('\n');
         }
         for (String key : sel.methods) {
@@ -187,7 +189,7 @@ final class Llvm {
                 continue;
             }
             emitFn(ir, fn.code, strings, mangleMethod(methodType(key), methodName(key)), checker, layouts, lambdas,
-                    fn.code.arity);
+                    fn.code.arity, dbg, fn);
             ir.append('\n');
         }
         for (FnDecl lam : lambdas.order) {
@@ -195,7 +197,7 @@ final class Llvm {
                 continue;
             }
             emitFn(ir, lam.code, strings, lambdas.names.get(lam), checker, layouts, lambdas,
-                    lambdas.ncopy.getOrDefault(lam, lam.code.arity));
+                    lambdas.ncopy.getOrDefault(lam, lam.code.arity), dbg, lam);
             ir.append('\n');
         }
         boolean needInit = !sel.methods.isEmpty() || !checker.enums.isEmpty() || !checker.classParents.isEmpty()
@@ -251,6 +253,7 @@ final class Llvm {
             ir.append("  ret i32 %e\n");
             ir.append("}\n");
         }
+        dbg.emit(ir);
         return ir.toString();
     }
 
@@ -893,24 +896,33 @@ final class Llvm {
     }
 
     private static void emitFn(StringBuilder ir, Bytecode.Fn fn, List<String> strings, String llvmName, Checker checker,
-            Map<String, List<String>> layouts, Lambdas lambdas, int ncopy) {
+            Map<String, List<String>> layouts, Lambdas lambdas, int ncopy, Dbg dbg, FnDecl src) {
         int nregs = Math.max(fn.nregs, 1);
         int n = fn.insts.size();
         boolean[] start = blockStarts(fn);
-        ir.append("define void @").append(llvmName).append("(ptr %out, ptr %args, i32 %argc) {\n");
+        int sp = dbg.subprogram(src == null ? llvmName : src.name, src == null ? checker.file : src.file,
+                src == null ? 1 : src.line);
+        int srcLine = src == null || src.line < 1 ? 1 : src.line;
+        ir.append("define void @").append(llvmName).append("(ptr %out, ptr %args, i32 %argc) !dbg !").append(sp)
+                .append(" {\n");
         ir.append("entry:\n");
         ir.append("  %regs = alloca [").append(nregs).append(" x %RGValue]\n");
+        attachDbg(ir, dbg, sp, srcLine, 1);
         int copy = Math.max(ncopy, 0);
         if (copy > nregs) {
             copy = nregs;
         }
         for (int i = 0; i < copy; i++) {
             ir.append("  %arg").append(i).append(" = getelementptr %RGValue, ptr %args, i32 ").append(i).append('\n');
+            attachDbg(ir, dbg, sp, srcLine, 1);
             ir.append("  %dst").append(i).append(" = getelementptr inbounds [").append(nregs)
                     .append(" x %RGValue], ptr %regs, i32 0, i32 ").append(i).append('\n');
+            attachDbg(ir, dbg, sp, srcLine, 1);
             ir.append("  call void @rg_copy(ptr %dst").append(i).append(", ptr %arg").append(i).append(")\n");
+            attachDbg(ir, dbg, sp, srcLine, 1);
         }
         ir.append("  br label %b0\n");
+        attachDbg(ir, dbg, sp, srcLine, 1);
         int[] tmp = {0};
         boolean[] flags = {false};
         boolean terminated = true;
@@ -918,6 +930,7 @@ final class Llvm {
             if (start[i]) {
                 if (!terminated) {
                     ir.append("  br label %b").append(i).append('\n');
+                    attachDbg(ir, dbg, sp, srcLine, 1);
                 }
                 ir.append("b").append(i).append(":\n");
                 terminated = false;
@@ -929,23 +942,30 @@ final class Llvm {
             if (in.op == Bytecode.Op.DEBUG) {
                 continue;
             }
+            int from = ir.length();
             terminated = emitInst(ir, fn, in, nregs, tmp, strings, i, checker, layouts, lambdas, flags);
+            attachNewLines(ir, from, dbg, sp, in.line, in.col);
             if (!terminated && mayThrow(in.op)) {
+                from = ir.length();
                 terminated = emitThrowEdge(ir, fn, i, nregs, tmp, flags);
+                attachNewLines(ir, from, dbg, sp, in.line, in.col);
             }
         }
         if (start[n]) {
             if (!terminated) {
                 ir.append("  br label %b").append(n).append('\n');
+                attachDbg(ir, dbg, sp, srcLine, 1);
             }
             ir.append("b").append(n).append(":\n");
             terminated = false;
         }
         if (!terminated) {
             ir.append("  call void @rg_set_void(ptr %out)\n");
+            attachDbg(ir, dbg, sp, srcLine, 1);
             ir.append("  ret void\n");
+            attachDbg(ir, dbg, sp, srcLine, 1);
         }
-        emitCatchPads(ir, fn, nregs, tmp, flags[0]);
+        emitCatchPads(ir, fn, nregs, tmp, flags[0], dbg, sp, srcLine);
         ir.append("}\n");
     }
 
@@ -1015,21 +1035,26 @@ final class Llvm {
         return true;
     }
 
-    private static void emitCatchPads(StringBuilder ir, Bytecode.Fn fn, int nregs, int[] tmp, boolean propagate) {
+    private static void emitCatchPads(StringBuilder ir, Bytecode.Fn fn, int nregs, int[] tmp, boolean propagate,
+            Dbg dbg, int sp, int srcLine) {
         if (fn.handlers != null) {
             for (int i = 0; i < fn.handlers.size(); i++) {
                 Bytecode.Fn.Handler h = fn.handlers.get(i);
                 ir.append("catch").append(i).append(":\n");
                 if (h.dest >= 0) {
+                    int from = ir.length();
                     ir.append(slot(nregs, h.dest, tmp));
                     ir.append("  call void @rg_catch(ptr ").append(last(tmp)).append(")\n");
+                    attachNewLines(ir, from, dbg, sp, srcLine, 1);
                 }
                 ir.append("  br label %b").append(h.handler).append('\n');
+                attachDbg(ir, dbg, sp, srcLine, 1);
             }
         }
         if (propagate) {
             ir.append("propagate:\n");
             ir.append("  ret void\n");
+            attachDbg(ir, dbg, sp, srcLine, 1);
         }
     }
 
@@ -1530,5 +1555,119 @@ final class Llvm {
 
     static String mangleMethod(String type, String method) {
         return "rg_fn_" + ident(type) + "_" + ident(method);
+    }
+
+    private static void attachDbg(StringBuilder ir, Dbg dbg, int sp, int line, int col) {
+        if (dbg == null) {
+            return;
+        }
+        int nl = ir.lastIndexOf("\n");
+        if (nl < 0) {
+            return;
+        }
+        String last = ir.substring(0, nl);
+        int prev = last.lastIndexOf('\n');
+        String text = last.substring(prev + 1).strip();
+        if (text.isEmpty() || text.endsWith(":") || text.startsWith(";")) {
+            return;
+        }
+        ir.insert(nl, ", !dbg !" + dbg.location(sp, line, col));
+    }
+
+    private static void attachNewLines(StringBuilder ir, int from, Dbg dbg, int sp, int line, int col) {
+        if (dbg == null) {
+            return;
+        }
+        String tag = ", !dbg !" + dbg.location(sp, line, col);
+        int i = Math.max(from, 0);
+        while (i < ir.length()) {
+            int nl = ir.indexOf("\n", i);
+            if (nl < 0) {
+                break;
+            }
+            String text = ir.substring(i, nl).strip();
+            if (!text.isEmpty() && !text.endsWith(":") && !text.startsWith(";") && !text.contains("!dbg")) {
+                ir.insert(nl, tag);
+                nl += tag.length();
+            }
+            i = nl + 1;
+        }
+    }
+
+    private static final class Dbg {
+        private final List<String> nodes = new ArrayList<>();
+        private final Map<String, Integer> files = new LinkedHashMap<>();
+        private final Map<String, Integer> locs = new LinkedHashMap<>();
+        private final int empty;
+        private final int subTy;
+        private final int cu;
+        private final int dwarfVer;
+        private final int dbgVer;
+
+        Dbg(String path) {
+            empty = add("!{}");
+            int file = fileId(path);
+            cu = add("distinct !DICompileUnit(language: DW_LANG_C99, file: !" + file
+                    + ", producer: \"RoseGold\", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug, enums: !"
+                    + empty + ")");
+            subTy = add("!DISubroutineType(types: !" + empty + ")");
+            dwarfVer = add("!{i32 7, !\"Dwarf Version\", i32 4}");
+            dbgVer = add("!{i32 2, !\"Debug Info Version\", i32 3}");
+        }
+
+        int subprogram(String name, String path, int line) {
+            int file = fileId(path);
+            String nm = name == null || name.isEmpty() ? "fn" : name;
+            return add("distinct !DISubprogram(name: \"" + esc(nm) + "\", scope: !" + file + ", file: !" + file
+                    + ", line: " + Math.max(line, 1) + ", type: !" + subTy
+                    + ", spFlags: DISPFlagDefinition, unit: !" + cu + ")");
+        }
+
+        int location(int sp, int line, int col) {
+            String key = sp + ":" + Math.max(line, 1) + ":" + Math.max(col, 1);
+            Integer hit = locs.get(key);
+            if (hit != null) {
+                return hit;
+            }
+            int id = add("!DILocation(line: " + Math.max(line, 1) + ", column: " + Math.max(col, 1)
+                    + ", scope: !" + sp + ")");
+            locs.put(key, id);
+            return id;
+        }
+
+        void emit(StringBuilder ir) {
+            ir.append("\n!llvm.dbg.cu = !{!").append(cu).append("}\n");
+            ir.append("!llvm.module.flags = !{!").append(dwarfVer).append(", !").append(dbgVer).append("}\n");
+            for (String node : nodes) {
+                ir.append(node).append('\n');
+            }
+        }
+
+        private int fileId(String path) {
+            String raw = path == null || path.isEmpty() ? "unknown.rg" : path.replace('\\', '/');
+            Integer hit = files.get(raw);
+            if (hit != null) {
+                return hit;
+            }
+            Path p = Path.of(raw);
+            String fileName = p.getFileName() == null ? raw : p.getFileName().toString();
+            String dir = p.getParent() == null ? "." : p.getParent().toString().replace('\\', '/');
+            int id = add("!DIFile(filename: \"" + esc(fileName) + "\", directory: \"" + esc(dir) + "\")");
+            files.put(raw, id);
+            return id;
+        }
+
+        private int add(String body) {
+            int id = nodes.size();
+            nodes.add("!" + id + " = " + body);
+            return id;
+        }
+
+        private static String esc(String s) {
+            if (s == null) {
+                return "";
+            }
+            return s.replace("\\", "\\\\").replace("\"", "\\\"");
+        }
     }
 }

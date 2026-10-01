@@ -183,6 +183,34 @@ public class DebugTest {
         assertTrue(result.out, result.out.contains("2/2 file tests passed"));
     }
 
+    @Test
+    public void fileSuiteNativePassAndFail() throws Exception {
+        if (LlvmLink.findClang() == null) {
+            return;
+        }
+        Path root = Files.createTempDirectory("rg-native-suite");
+        Path pass = root.resolve("pass");
+        Path fail = root.resolve("fail");
+        Files.createDirectories(pass);
+        Files.createDirectories(fail);
+        Files.writeString(pass.resolve("ok.rg"), """
+                fn main(): Int {
+                    return 0;
+                }
+                """, StandardCharsets.UTF_8);
+        Files.writeString(fail.resolve("boom.rg"), """
+                # expect: unknown function
+                fn main(): Int {
+                    nope();
+                    return 0;
+                }
+                """, StandardCharsets.UTF_8);
+        Run.Result result = Run.testSuite(root, null, true);
+        assertTrue(result.out, result.ok);
+        assertTrue(result.out, result.out.contains("ok   "));
+        assertTrue(result.out, result.out.contains("2/2 file tests passed"));
+    }
+
     private static int assignLine(String src, String path) {
         List<Diagnostic> diags = new java.util.ArrayList<>();
         Program program = Parser.parseSource(src, path, diags);
