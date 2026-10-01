@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templateSet group="RoseGold">
+    <template name="fn" value="fn $NAME$($ARGS$)$RET$ {&#10;    $END$&#10;}" description="function" toReformat="false" toShortenFQNames="false">
+        <variable name="NAME" expression="" defaultValue="&quot;name&quot;" alwaysStopAt="true"/>
+        <variable name="ARGS" expression="" defaultValue="" alwaysStopAt="true"/>
+        <variable name="RET" expression="" defaultValue="&quot;: Int&quot;" alwaysStopAt="true"/>
+        <context>
+            <option name="ROSEGOLD" value="true"/>
+        </context>
+    </template>
+    <template name="main" value="fn main(): Int {&#10;    $END$&#10;    return 0;&#10;}" description="main function" toReformat="false" toShortenFQNames="false">
+        <context>
+            <option name="ROSEGOLD" value="true"/>
+        </context>
+    </template>
+    <template name="test" value="@test&#10;fn $NAME$() {&#10;    $END$&#10;}" description="@test function" toReformat="false" toShortenFQNames="false">
+        <variable name="NAME" expression="" defaultValue="&quot;name&quot;" alwaysStopAt="true"/>
+        <context>
+            <option name="ROSEGOLD" value="true"/>
+        </context>
+    </template>
+    <template name="class" value="class $NAME$ {&#10;    $END$&#10;}" description="class" toReformat="false" toShortenFQNames="false">
+        <variable name="NAME" expression="" defaultValue="&quot;Name&quot;" alwaysStopAt="true"/>
+        <context>
+            <option name="ROSEGOLD" value="true"/>
+        </context>
+    </template>
+    <template name="struct" value="struct $NAME$ {&#10;    $END$&#10;}" description="struct" toReformat="false" toShortenFQNames="false">
+        <variable name="NAME" expression="" defaultValue="&quot;Name&quot;" alwaysStopAt="true"/>
+        <context>
+            <option name="ROSEGOLD" value="true"/>
+        </context>
+    </template>
+    <template name="enum" value="enum $NAME$ {&#10;    $END$&#10;}" description="enum" toReformat="false" toShortenFQNames="false">
+        <variable name="NAME" expression="" defaultValue="&quot;Name&quot;" alwaysStopAt="true"/>
+        <context>
+            <option name="ROSEGOLD" value="true"/>
+        </context>
+    </template>
+    <template name="trait" value="trait $NAME$ {&#10;    $END$&#10;}" description="trait" toReformat="false" toShortenFQNames="false">
+        <variable name="NAME" expression="" defaultValue="&quot;Name&quot;" alwaysStopAt="true"/>
+        <context>
+            <option name="ROSEGOLD" value="true"/>
+        </context>
+    </template>
+    <template name="match" value="match $EXPR$ {&#10;    $END$&#10;}" description="match" toReformat="false" toShortenFQNames="false">
+        <variable name="EXPR" expression="" defaultValue="&quot;x&quot;" alwaysStopAt="true"/>
+        <context>
+            <option name="ROSEGOLD" value="true"/>
+        </context>
+    </template>
+    <template name="switch" value="switch $EXPR$ {&#10;    $END$&#10;}" description="switch" toReformat="false" toShortenFQNames="false">
+        <variable name="EXPR" expression="" defaultValue="&quot;x&quot;" alwaysStopAt="true"/>
+        <context>
+            <option name="ROSEGOLD" value="true"/>
+        </context>
+    </template>
+    <template name="import" value="import $CRATE$;" description="import crate" toReformat="false" toShortenFQNames="false">
+        <variable name="CRATE" expression="" defaultValue="&quot;ui&quot;" alwaysStopAt="true"/>
+        <context>
+            <option name="ROSEGOLD" value="true"/>
+        </context>
+    </template>
+</templateSet>

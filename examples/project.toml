@@ -1,0 +1,16 @@
+[project]
+name = "RoseGold Examples"
+author = "Kalob"
+version = "1.0.0"
+rosegold = "1.0.0"
+entry = "hello.rg"
+
+[modules]
+calc = "calc"
+
+[profile.debug]
+
+[profile.release]
+
+[profile.test]
+entry = "tests.rg"

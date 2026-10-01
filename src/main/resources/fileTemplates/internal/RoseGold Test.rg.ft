@@ -1,0 +1,8 @@
+@test
+fn ${NAME}() {
+    assert(true);
+}
+
+fn main(): Int {
+    return 0;
+}

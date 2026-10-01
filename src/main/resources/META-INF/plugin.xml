@@ -1,0 +1,220 @@
+<idea-plugin>
+    <id>com.rosegoldc.idea</id>
+    <name>RoseGold</name>
+    <vendor>rosegoldc</vendor>
+    <description><![CDATA[
+        RoseGold language support for .rg files. Built-in parse, type diagnostics, completion, hover,
+        go-to-definition, find usages, rename, format, structure view,
+        parameter and type hints, signature help, color chips, Alt+Enter quick fixes, run and test via the
+        Java interpreter (including project.toml entry), File → New RoseGold Project, and debug via in-process breakpoints, stepping, and watches.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.modules.xdebugger</depends>
+    <depends>com.intellij.modules.spellchecker</depends>
+    <depends optional="true" config-file="rosegold-toml.xml">org.toml.lang</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <fileType
+                name="RoseGold"
+                implementationClass="com.rosegoldc.idea.RoseGoldFileType"
+                fieldName="INSTANCE"
+                language="RoseGold"
+                extensions="rg"/>
+        <lang.parserDefinition
+                language="RoseGold"
+                implementationClass="com.rosegoldc.idea.psi.RoseGoldParserDefinition"/>
+        <lang.ast.factory
+                language="RoseGold"
+                implementationClass="com.rosegoldc.idea.psi.RoseGoldAstFactory"/>
+        <lang.syntaxHighlighterFactory
+                language="RoseGold"
+                implementationClass="com.rosegoldc.idea.editor.RoseGoldSyntaxHighlighterFactory"/>
+        <colorSettingsPage implementation="com.rosegoldc.idea.editor.RoseGoldColorSettingsPage"/>
+        <lang.braceMatcher
+                language="RoseGold"
+                implementationClass="com.rosegoldc.idea.editor.RoseGoldBraceMatcher"/>
+        <lang.quoteHandler
+                language="RoseGold"
+                implementationClass="com.rosegoldc.idea.editor.RoseGoldQuoteHandler"/>
+        <lang.surroundDescriptor
+                language="RoseGold"
+                implementationClass="com.rosegoldc.idea.editor.RoseGoldSurroundDescriptor"/>
+        <lang.unwrapDescriptor
+                language="RoseGold"
+                implementationClass="com.rosegoldc.idea.editor.RoseGoldUnwrapDescriptor"/>
+        <statementUpDownMover
+                implementation="com.rosegoldc.idea.editor.RoseGoldStatementMover"
+                order="first"/>
+        <joinLinesHandler implementation="com.rosegoldc.idea.editor.RoseGoldJoinLinesHandler"/>
+        <extendWordSelectionHandler implementation="com.rosegoldc.idea.editor.RoseGoldExtendWordSelectionHandler"/>
+        <codeBlockProvider
+                language="RoseGold"
+                implementationClass="com.rosegoldc.idea.editor.RoseGoldCodeBlockProvider"/>
+        <enterBetweenBracesDelegate
+                language="RoseGold"
+                implementationClass="com.rosegoldc.idea.editor.RoseGoldEnterBetweenBracesDelegate"/>
+        <backspaceHandlerDelegate implementation="com.rosegoldc.idea.editor.RoseGoldBackspaceHandler"/>
+        <typedHandler implementation="com.rosegoldc.idea.editor.RoseGoldTypedHandler"/>
+        <editorActionHandler
+                action="EditorTab"
+                implementationClass="com.rosegoldc.idea.editor.RoseGoldTabHandler"/>
+        <lang.smartEnterProcessor
+                language="RoseGold"
+                implementationClass="com.rosegoldc.idea.editor.RoseGoldSmartEnterProcessor"/>
+        <langCodeStyleSettingsProvider
+                implementation="com.rosegoldc.idea.editor.RoseGoldLanguageCodeStyleSettingsProvider"/>
+        <lang.commenter
+                language="RoseGold"
+                implementationClass="com.rosegoldc.idea.editor.RoseGoldCommenter"/>
+        <spellchecker.support
+                language="RoseGold"
+                implementationClass="com.rosegoldc.idea.editor.RoseGoldSpellcheckingStrategy"/>
+        <todoIndexer
+                filetype="RoseGold"
+                implementationClass="com.rosegoldc.idea.editor.RoseGoldTodoIndexer"/>
+        <idIndexer
+                filetype="RoseGold"
+                implementationClass="com.rosegoldc.idea.editor.RoseGoldIdIndexer"/>
+        <indexPatternBuilder implementation="com.rosegoldc.idea.editor.RoseGoldIndexPatternBuilder"/>
+        <lang.foldingBuilder
+                language="RoseGold"
+                implementationClass="com.rosegoldc.idea.editor.RoseGoldFoldingBuilder"/>
+        <lang.psiStructureViewFactory
+                language="RoseGold"
+                implementationClass="com.rosegoldc.idea.editor.RoseGoldStructureViewFactory"/>
+        <breadcrumbsInfoProvider implementation="com.rosegoldc.idea.editor.RoseGoldBreadcrumbsProvider"/>
+        <gotoClassContributor implementation="com.rosegoldc.idea.insight.RoseGoldGotoClassContributor"/>
+        <gotoSymbolContributor implementation="com.rosegoldc.idea.insight.RoseGoldGotoSymbolContributor"/>
+        <liveTemplateContext contextId="ROSEGOLD" implementation="com.rosegoldc.idea.editor.RoseGoldTemplateContextType"/>
+        <defaultLiveTemplates file="/liveTemplates/RoseGold.xml"/>
+        <codeInsight.template.postfixTemplateProvider
+                language="RoseGold"
+                implementationClass="com.rosegoldc.idea.editor.RoseGoldPostfixTemplateProvider"/>
+        <externalAnnotator
+                language="RoseGold"
+                implementationClass="com.rosegoldc.idea.insight.RoseGoldExternalAnnotator"/>
+        <annotator
+                language="TEXT"
+                implementationClass="com.rosegoldc.idea.insight.RoseGoldProjectAnnotator"/>
+        <completion.contributor
+                language="RoseGold"
+                implementationClass="com.rosegoldc.idea.insight.RoseGoldCompletionContributor"/>
+        <codeInsight.inlayProvider
+                language="RoseGold"
+                implementationClass="com.rosegoldc.idea.insight.RoseGoldInlayHintsProvider"
+                isEnabledByDefault="true"/>
+        <codeInsight.parameterInfo
+                language="RoseGold"
+                implementationClass="com.rosegoldc.idea.insight.RoseGoldParameterInfoHandler"/>
+        <colorProvider implementation="com.rosegoldc.idea.insight.RoseGoldColorProvider"/>
+        <intentionAction>
+            <language>RoseGold</language>
+            <className>com.rosegoldc.idea.insight.RoseGoldQuickFixIntention$WrapTry</className>
+            <category>RoseGold</category>
+            <skipBeforeAfter>true</skipBeforeAfter>
+        </intentionAction>
+        <intentionAction>
+            <language>RoseGold</language>
+            <className>com.rosegoldc.idea.insight.RoseGoldQuickFixIntention$MatchArms</className>
+            <category>RoseGold</category>
+            <skipBeforeAfter>true</skipBeforeAfter>
+        </intentionAction>
+        <intentionAction>
+            <language>RoseGold</language>
+            <className>com.rosegoldc.idea.insight.RoseGoldQuickFixIntention$ImplementTrait</className>
+            <category>RoseGold</category>
+            <skipBeforeAfter>true</skipBeforeAfter>
+        </intentionAction>
+        <intentionAction>
+            <language>RoseGold</language>
+            <className>com.rosegoldc.idea.insight.RoseGoldQuickFixIntention$AddMethod</className>
+            <category>RoseGold</category>
+            <skipBeforeAfter>true</skipBeforeAfter>
+        </intentionAction>
+        <intentionAction>
+            <language>RoseGold</language>
+            <className>com.rosegoldc.idea.insight.RoseGoldQuickFixIntention$ImportCrate</className>
+            <category>RoseGold</category>
+            <skipBeforeAfter>true</skipBeforeAfter>
+        </intentionAction>
+        <intentionAction>
+            <language>RoseGold</language>
+            <className>com.rosegoldc.idea.insight.RoseGoldQuickFixIntention$AwaitFuture</className>
+            <category>RoseGold</category>
+            <skipBeforeAfter>true</skipBeforeAfter>
+        </intentionAction>
+        <intentionAction>
+            <language>RoseGold</language>
+            <className>com.rosegoldc.idea.insight.RoseGoldQuickFixIntention$RemoveImport</className>
+            <category>RoseGold</category>
+            <skipBeforeAfter>true</skipBeforeAfter>
+        </intentionAction>
+        <platform.backend.documentation.targetProvider
+                implementation="com.rosegoldc.idea.insight.RoseGoldDocumentationTargetProvider"/>
+        <gotoDeclarationHandler
+                implementation="com.rosegoldc.idea.insight.RoseGoldGotoDeclarationHandler"/>
+        <lang.findUsagesProvider
+                language="RoseGold"
+                implementationClass="com.rosegoldc.idea.refactor.RoseGoldFindUsagesProvider"/>
+        <findUsagesHandlerFactory
+                implementation="com.rosegoldc.idea.refactor.RoseGoldFindUsagesHandlerFactory"/>
+        <highlightUsagesHandlerFactory
+                implementation="com.rosegoldc.idea.refactor.RoseGoldHighlightUsagesHandlerFactory"/>
+        <renamePsiElementProcessor
+                implementation="com.rosegoldc.idea.refactor.RoseGoldRenameProcessor"/>
+        <lang.namesValidator
+                language="RoseGold"
+                implementationClass="com.rosegoldc.idea.refactor.RoseGoldNamesValidator"/>
+        <lang.refactoringSupport
+                language="RoseGold"
+                implementationClass="com.rosegoldc.idea.refactor.RoseGoldRefactoringSupportProvider"/>
+        <formattingService implementation="com.rosegoldc.idea.editor.RoseGoldFormattingService"/>
+        <notificationGroup id="RoseGold" displayType="BALLOON"/>
+        <configurationType
+                implementation="com.rosegoldc.idea.run.RoseGoldRunConfigurationType"/>
+        <runConfigurationProducer
+                implementation="com.rosegoldc.idea.run.RoseGoldRunConfigurationProducer"/>
+        <runLineMarkerContributor
+                language="RoseGold"
+                implementationClass="com.rosegoldc.idea.run.RoseGoldRunLineMarkerContributor"/>
+        <programRunner implementation="com.rosegoldc.idea.debug.RoseGoldDebugRunner"/>
+        <xdebugger.breakpointType implementation="com.rosegoldc.idea.debug.RoseGoldLineBreakpointType"/>
+        <configurationType
+                implementation="com.rosegoldc.idea.run.RoseGoldTestConfigurationType"/>
+        <runConfigurationProducer
+                implementation="com.rosegoldc.idea.run.RoseGoldTestConfigurationProducer"/>
+        <runLineMarkerContributor
+                language="RoseGold"
+                implementationClass="com.rosegoldc.idea.run.RoseGoldTestLineMarkerContributor"/>
+        <applicationService serviceImplementation="com.rosegoldc.idea.RoseGoldSettings"/>
+        <applicationConfigurable
+                parentId="language"
+                instance="com.rosegoldc.idea.RoseGoldConfigurable"
+                id="com.rosegoldc.idea.settings"
+                displayName="RoseGold"/>
+        <internalFileTemplate name="RoseGold File"/>
+        <internalFileTemplate name="RoseGold Test"/>
+    </extensions>
+
+    <actions>
+        <action id="RoseGold.NewProject"
+                class="com.rosegoldc.idea.RoseGoldCreateProjectAction"
+                text="RoseGold Project"
+                description="Create project.toml, main.rg, and tests.rg">
+            <add-to-group group-id="NewGroup" anchor="before" relative-to-action="RoseGold.NewFile"/>
+        </action>
+        <action id="RoseGold.NewModule"
+                class="com.rosegoldc.idea.RoseGoldCreateModuleAction"
+                text="RoseGold Module"
+                description="Create a mapped module under [modules]">
+            <add-to-group group-id="NewGroup" anchor="after" relative-to-action="RoseGold.NewProject"/>
+        </action>
+        <action id="RoseGold.NewFile"
+                class="com.rosegoldc.idea.RoseGoldCreateFileAction"
+                text="RoseGold File"
+                description="Create a new RoseGold source file">
+            <add-to-group group-id="NewGroup" anchor="before" relative-to-action="NewFile"/>
+        </action>
+    </actions>
+</idea-plugin>
