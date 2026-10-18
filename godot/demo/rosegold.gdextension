@@ -1,0 +1,13 @@
+[configuration]
+
+entry_symbol = "rosegold_library_init"
+compatibility_minimum = "4.4"
+
+[libraries]
+
+windows.debug.x86_64 = "res://bin/rosegold_godot.dll"
+windows.release.x86_64 = "res://bin/rosegold_godot.dll"
+linux.debug.x86_64 = "res://bin/rosegold_godot.so"
+linux.release.x86_64 = "res://bin/rosegold_godot.so"
+macos.debug = "res://bin/rosegold_godot.dylib"
+macos.release = "res://bin/rosegold_godot.dylib"

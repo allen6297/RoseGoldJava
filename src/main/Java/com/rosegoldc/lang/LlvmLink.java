@@ -7,7 +7,10 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -79,6 +82,84 @@ final class LlvmLink {
         }
         if (mismatch != null) {
             clangSkipReason = mismatch + " is " + mismatchWhy;
+        }
+        return null;
+    }
+
+    private static Boolean clangCanRun;
+
+    static boolean canRunClang() {
+        if (clangCanRun != null) {
+            return clangCanRun;
+        }
+        Path clang = findClang();
+        if (clang == null) {
+            clangCanRun = false;
+            return false;
+        }
+        try {
+            ProcessBuilder pb = new ProcessBuilder(clang.toString(), "--version");
+            pb.redirectErrorStream(true);
+            Process proc = pb.start();
+            proc.getInputStream().readAllBytes();
+            clangCanRun = proc.waitFor(15, TimeUnit.SECONDS) && proc.exitValue() == 0;
+        } catch (Exception ex) {
+            clangCanRun = false;
+        }
+        return clangCanRun;
+    }
+
+    static Path findLldbDap() {
+        Path clang = findClang();
+        if (clang != null) {
+            Path hit = lldbDapIn(clang.getParent());
+            if (hit != null) {
+                return hit;
+            }
+        }
+        List<String> names = isWindows()
+                ? List.of("lldb-dap.exe", "lldb-vscode.exe")
+                : List.of("lldb-dap", "lldb-vscode");
+        String path = System.getenv("PATH");
+        if (path != null) {
+            for (String dir : path.split(java.io.File.pathSeparator)) {
+                if (dir.isBlank()) {
+                    continue;
+                }
+                Path folder = Path.of(dir);
+                for (String name : names) {
+                    Path cand = folder.resolve(name);
+                    if (Files.isRegularFile(cand)) {
+                        return cand.toAbsolutePath().normalize();
+                    }
+                }
+            }
+        }
+        if (isWindows()) {
+            for (String extra : List.of(
+                    "C:\\Program Files\\LLVM\\bin",
+                    "C:\\Program Files (x86)\\LLVM\\bin")) {
+                Path hit = lldbDapIn(Path.of(extra));
+                if (hit != null) {
+                    return hit;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static Path lldbDapIn(Path dir) {
+        if (dir == null || !Files.isDirectory(dir)) {
+            return null;
+        }
+        List<String> names = isWindows()
+                ? List.of("lldb-dap.exe", "lldb-vscode.exe")
+                : List.of("lldb-dap", "lldb-vscode");
+        for (String name : names) {
+            Path cand = dir.resolve(name);
+            if (Files.isRegularFile(cand)) {
+                return cand.toAbsolutePath().normalize();
+            }
         }
         return null;
     }
@@ -184,10 +265,18 @@ final class LlvmLink {
     }
 
     static Path resolveNativeDir(Path cwd) {
-        Path root = cwd == null ? Path.of("").toAbsolutePath() : cwd.toAbsolutePath();
-        Path local = root.resolve("native");
-        if (isNativeDir(local)) {
-            return local.normalize();
+        Path start = cwd == null ? Path.of("").toAbsolutePath() : cwd.toAbsolutePath().normalize();
+        Path p = start;
+        while (true) {
+            Path local = p.resolve("native");
+            if (isNativeDir(local)) {
+                return local.normalize();
+            }
+            Path parent = p.getParent();
+            if (parent == null || parent.equals(p)) {
+                break;
+            }
+            p = parent;
         }
         return bundledNative();
     }
@@ -206,6 +295,8 @@ final class LlvmLink {
             cmd.add("-O0");
             cmd.add("-g");
             cmd.add("-Wno-override-module");
+        cmd.add("-I");
+        cmd.add(runtimeC.getParent() == null ? "." : runtimeC.getParent().toString());
         cmd.add("-o");
         cmd.add(output.toString());
         cmd.add(irFile.toString());
@@ -220,6 +311,156 @@ final class LlvmLink {
             cmd.add("-lm");
         }
         return cmd;
+    }
+
+    static Path withSharedSuffix(Path out) {
+        if (out == null) {
+            return null;
+        }
+        String name = out.getFileName() == null ? "" : out.getFileName().toString();
+        String lower = name.toLowerCase();
+        if (isWindows()) {
+            if (!lower.endsWith(".dll")) {
+                return out.resolveSibling(name + ".dll");
+            }
+            return out;
+        }
+        String os = System.getProperty("os.name");
+        boolean mac = os != null && os.toLowerCase().contains("mac");
+        String suffix = mac ? ".dylib" : ".so";
+        if (!lower.endsWith(suffix)) {
+            return out.resolveSibling(name + suffix);
+        }
+        return out;
+    }
+
+    static boolean godotLowered(String ir) {
+        return ir != null && !ir.contains("{ not lowered to llvm }") && ir.contains("define void @rg_godot_new(");
+    }
+
+    static List<String> clangSharedCommand(Path clang, Path irFile, Path runtimeC, Path hostGodot, Path output) {
+        List<String> cmd = new ArrayList<>();
+        cmd.add(clang.toString());
+        cmd.add("-std=c11");
+        cmd.add("-O0");
+        cmd.add("-g");
+        cmd.add("-shared");
+        cmd.add("-Wno-override-module");
+        if (!isWindows()) {
+            cmd.add("-fPIC");
+        }
+        cmd.add("-I");
+        cmd.add(runtimeC.getParent() == null ? "." : runtimeC.getParent().toString());
+        cmd.add("-o");
+        cmd.add(output.toString());
+        cmd.add(irFile.toString());
+        cmd.add(runtimeC.toString());
+        cmd.add(hostGodot.toString());
+        if (isWindows()) {
+            cmd.add("-luser32");
+            cmd.add("-lgdi32");
+            cmd.add("-lole32");
+            cmd.add("-luuid");
+            cmd.add("-lwindowscodecs");
+        } else {
+            cmd.add("-lm");
+        }
+        return cmd;
+    }
+
+    static Result linkGodot(Checker checker, Path nativeDir, Path output) throws IOException, InterruptedException {
+        if (checker == null) {
+            return new Result(false, 1, "no program", null, null, null);
+        }
+        GodotScript.Model model = GodotScript.model(checker);
+        if (model == null) {
+            return new Result(false, 1, "no class extends Node, Node2D, Node3D, or Control", null, null, null);
+        }
+        String ir = Llvm.emit(checker, false, true);
+        if (!godotLowered(ir)) {
+            return new Result(false, 1, "cannot link: some functions were not lowered to llvm", null, null, null);
+        }
+        for (GodotScript.Member method : model.methods) {
+            String sym = Llvm.mangleMethod(model.className, method.name);
+            if (!ir.contains("define void @" + sym + "(")) {
+                return new Result(false, 1,
+                        "cannot link: " + model.className + "." + method.name + " was not lowered to llvm",
+                        null, null, null);
+            }
+        }
+        Path clang = findClang();
+        if (clang == null) {
+            if (clangSkipReason != null) {
+                return new Result(false, 1, "llvm --godot cannot run clang: " + clangSkipReason, null, null, null);
+            }
+            return new Result(false, 1, "llvm --godot needs clang on PATH (LLVM 15+)", null, null, null);
+        }
+        if (!isNativeDir(nativeDir)) {
+            return new Result(false, 1, "native/runtime.c not found", null, clang, null);
+        }
+        Path host = nativeDir.resolve("host_godot.c").toAbsolutePath().normalize();
+        if (!Files.isRegularFile(host)) {
+            return new Result(false, 1, "native/host_godot.c not found", null, clang, null);
+        }
+        String stamp = linkStamp(ir, nativeDir, clang, false, true);
+        Path cached = withSharedSuffix(runCacheDir().resolve("g" + stamp));
+        Path out = output == null ? cached : withSharedSuffix(output.toAbsolutePath().normalize());
+        Path manifest = manifestBeside(out);
+        if (!(Files.isRegularFile(cached) && Files.size(cached) > 0)) {
+            Path parent = cached.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+            Path tmp = Files.createTempDirectory("rg-llvm-");
+            Path ll = tmp.resolve("program.ll");
+            Files.writeString(ll, ir, StandardCharsets.UTF_8);
+            Path runtimeC = nativeDir.resolve("runtime.c").toAbsolutePath().normalize();
+            List<String> cmd = clangSharedCommand(clang, ll.toAbsolutePath().normalize(), runtimeC, host, cached);
+            try {
+                ProcessBuilder pb = new ProcessBuilder(cmd);
+                pb.redirectErrorStream(true);
+                pb.directory(runCacheDir().toFile());
+                Process proc;
+                try {
+                    proc = pb.start();
+                } catch (IOException ex) {
+                    Files.deleteIfExists(cached);
+                    return new Result(false, 1, ex.getMessage() == null ? "clang failed" : ex.getMessage(), out, clang, cmd);
+                }
+                String log = new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                if (!proc.waitFor(120, TimeUnit.SECONDS)) {
+                    proc.destroyForcibly();
+                    Files.deleteIfExists(cached);
+                    return new Result(false, 1, "clang timed out\n" + log, out, clang, cmd);
+                }
+                int code = proc.exitValue();
+                if (code != 0) {
+                    Files.deleteIfExists(cached);
+                    return new Result(false, 1, log.isEmpty() ? "clang failed" : log, out, clang, cmd);
+                }
+                if (!Files.isRegularFile(cached)) {
+                    return new Result(false, 1, "clang produced no output", out, clang, cmd);
+                }
+            } finally {
+                try {
+                    Files.deleteIfExists(ll);
+                    Files.deleteIfExists(tmp);
+                } catch (IOException ignored) {
+                }
+            }
+        }
+        copyIfNeeded(cached, out);
+        Files.writeString(manifest, GodotScript.manifest(model, out.toString()), StandardCharsets.UTF_8);
+        return new Result(true, 0, "", out, clang, List.of("(godot)"));
+    }
+
+    static Path manifestBeside(Path library) {
+        String name = library.getFileName() == null ? "script" : library.getFileName().toString();
+        int dot = name.lastIndexOf('.');
+        if (dot > 0) {
+            name = name.substring(0, dot);
+        }
+        return library.resolveSibling(name + ".json");
     }
 
     static Result link(Checker checker, Path nativeDir, Path output) throws IOException, InterruptedException {
@@ -245,8 +486,14 @@ final class LlvmLink {
         if (!isNativeDir(nativeDir)) {
             return new Result(false, 1, "native/runtime.c not found", null, clang, null);
         }
-        Path out = withExeSuffix(output.toAbsolutePath().normalize());
-        Path parent = out.getParent();
+        String stamp = linkStamp(ir, nativeDir, clang, test, false);
+        Path cached = withExeSuffix(runCacheDir().resolve("l" + stamp));
+        Path out = output == null ? cached : withExeSuffix(output.toAbsolutePath().normalize());
+        if (Files.isRegularFile(cached) && Files.size(cached) > 0) {
+            copyIfNeeded(cached, out);
+            return new Result(true, 0, "", out, clang, List.of("(cached)"));
+        }
+        Path parent = cached.getParent();
         if (parent != null) {
             Files.createDirectories(parent);
         }
@@ -254,24 +501,83 @@ final class LlvmLink {
         Path ll = tmp.resolve("program.ll");
         Files.writeString(ll, ir, StandardCharsets.UTF_8);
         Path runtimeC = nativeDir.resolve("runtime.c").toAbsolutePath().normalize();
-        List<String> cmd = clangCommand(clang, ll.toAbsolutePath().normalize(), runtimeC, out);
-        ProcessBuilder pb = new ProcessBuilder(cmd);
-        pb.redirectErrorStream(true);
-        pb.directory(nativeDir.toFile());
-        Process proc = pb.start();
-        String log = new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-        if (!proc.waitFor(120, TimeUnit.SECONDS)) {
-            proc.destroyForcibly();
-            return new Result(false, 1, "clang timed out\n" + log, out, clang, cmd);
+        List<String> cmd = clangCommand(clang, ll.toAbsolutePath().normalize(), runtimeC, cached);
+        try {
+            ProcessBuilder pb = new ProcessBuilder(cmd);
+            pb.redirectErrorStream(true);
+            pb.directory(runCacheDir().toFile());
+            Process proc;
+            try {
+                proc = pb.start();
+            } catch (IOException ex) {
+                Files.deleteIfExists(cached);
+                return new Result(false, 1, ex.getMessage() == null ? "clang failed" : ex.getMessage(), out, clang, cmd);
+            }
+            String log = new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+            if (!proc.waitFor(120, TimeUnit.SECONDS)) {
+                proc.destroyForcibly();
+                Files.deleteIfExists(cached);
+                return new Result(false, 1, "clang timed out\n" + log, out, clang, cmd);
+            }
+            int code = proc.exitValue();
+            if (code != 0) {
+                Files.deleteIfExists(cached);
+                return new Result(false, 1, log.isEmpty() ? "clang failed" : log, out, clang, cmd);
+            }
+            if (!Files.isRegularFile(cached)) {
+                return new Result(false, 1, "clang produced no output", out, clang, cmd);
+            }
+            copyIfNeeded(cached, out);
+            return new Result(true, 0, log, out, clang, cmd);
+        } finally {
+            try {
+                Files.deleteIfExists(ll);
+                Files.deleteIfExists(tmp);
+            } catch (IOException ignored) {
+            }
         }
-        int code = proc.exitValue();
-        if (code != 0) {
-            return new Result(false, 1, log.isEmpty() ? "clang failed" : log, out, clang, cmd);
+    }
+
+    private static void copyIfNeeded(Path src, Path dest) throws IOException {
+        if (src == null || dest == null || src.equals(dest)) {
+            return;
         }
-        if (!Files.isRegularFile(out)) {
-            return new Result(false, 1, "clang produced no output", out, clang, cmd);
+        Path parent = dest.getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
         }
-        return new Result(true, 0, log, out, clang, cmd);
+        Files.copy(src, dest, StandardCopyOption.REPLACE_EXISTING);
+    }
+
+    static String linkStamp(String ir, Path nativeDir, Path clang, boolean test) throws IOException {
+        return linkStamp(ir, nativeDir, clang, test, false);
+    }
+
+    static String linkStamp(String ir, Path nativeDir, Path clang, boolean test, boolean godot) throws IOException {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            md.update(("rg-link-1|" + Main.VERSION + "|" + (godot ? "g" : test ? "t" : "r")).getBytes(StandardCharsets.UTF_8));
+            md.update((ir == null ? "" : ir).getBytes(StandardCharsets.UTF_8));
+            List<String> names = godot
+                    ? List.of("runtime.c", "host_ui.c", "host_img.c", "host_godot.c", "rg_value.h")
+                    : List.of("runtime.c", "host_ui.c", "host_img.c", "rg_value.h");
+            for (String name : names) {
+                stampFile(md, nativeDir == null ? null : nativeDir.resolve(name));
+            }
+            stampFile(md, clang);
+            return HexFormat.of().formatHex(md.digest()).substring(0, 20);
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IOException("SHA-256 unavailable", ex);
+        }
+    }
+
+    private static void stampFile(MessageDigest md, Path file) throws IOException {
+        String path = file == null ? "" : file.toAbsolutePath().normalize().toString();
+        md.update(path.getBytes(StandardCharsets.UTF_8));
+        if (file != null && Files.isRegularFile(file)) {
+            md.update(Long.toString(Files.size(file)).getBytes(StandardCharsets.UTF_8));
+            md.update(Long.toString(Files.getLastModifiedTime(file).toMillis()).getBytes(StandardCharsets.UTF_8));
+        }
     }
 
     static Result run(Checker checker, Path nativeDir, Path output) throws IOException, InterruptedException {

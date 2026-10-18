@@ -197,6 +197,7 @@ public final class RoseGoldPsiParser implements PsiParser {
 
     private static boolean isMod(@Nullable String word) {
         return "pub".equals(word) || "private".equals(word) || "protected".equals(word)
-                || "abstract".equals(word) || "final".equals(word) || "async".equals(word);
+                || "abstract".equals(word) || "final".equals(word) || "async".equals(word)
+                || "export".equals(word);
     }
 }

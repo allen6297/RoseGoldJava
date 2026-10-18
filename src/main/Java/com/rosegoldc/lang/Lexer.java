@@ -145,6 +145,7 @@ public final class Lexer {
             case "pub" -> Tok.Pub;
             case "abstract" -> Tok.Abstract;
             case "final" -> Tok.Final;
+            case "static" -> Tok.Static;
             case "private" -> Tok.Private;
             case "protected" -> Tok.Protected;
             case "mod" -> Tok.Module;
@@ -159,6 +160,7 @@ public final class Lexer {
             case "switch" -> Tok.Switch;
             case "var" -> Tok.Variable;
             case "const" -> Tok.Constant;
+            case "export" -> Tok.Export;
             case "struct" -> Tok.Struct;
             case "data" -> Tok.Data;
             case "impl" -> Tok.Implements;
@@ -180,6 +182,7 @@ public final class Lexer {
             case "await" -> Tok.Await;
             case "true" -> Tok.True;
             case "false" -> Tok.False;
+            case "null" -> Tok.Null;
             default -> Tok.Identifier;
         };
         return t;
@@ -349,6 +352,10 @@ public final class Lexer {
             if (peek() == '=') {
                 advance();
                 return make(Tok.DotDotEq, "..=", startLine, startCol);
+            }
+            if (peek() == '.') {
+                advance();
+                return make(Tok.Ellipsis, "...", startLine, startCol);
             }
             return make(Tok.DotDot, "..", startLine, startCol);
         }

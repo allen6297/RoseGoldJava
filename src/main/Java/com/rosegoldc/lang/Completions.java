@@ -24,11 +24,11 @@ public final class Completions {
     }
 
     private static final String[] KEYWORDS = {
-            "fn", "var", "const", "struct", "data", "class", "trait", "extends",
+            "fn", "var", "const", "export", "static", "struct", "data", "class", "trait", "extends",
             "enum", "mod", "impl", "pub", "private", "protected", "abstract", "final",
             "match", "switch", "for", "in", "super", "signal", "import", "from", "as",
             "return", "pass", "break", "continue", "if", "elif", "else", "while",
-            "self", "true", "false", "try", "do", "throws", "throw", "catch",
+            "self", "true", "false", "null", "try", "do", "throws", "throw", "catch",
             "async", "await", "spawn"
     };
 

@@ -16,12 +16,33 @@ public final class Check {
         List<Diagnostic> diags = new ArrayList<>();
         try {
             Program program = Parser.parseSource(source, path, diags);
-            Checker.check(program, path, diags);
+            Checker.check(program, path, diags, godotProject(path));
             UnusedImports.check(source, path, program, diags);
         } catch (LangException ex) {
             diags.add(ex.diagnostic);
         }
         return diags;
+    }
+
+    /** A script beside a Godot project is checked with the engine stubs, the same way {@code llvm --godot} loads them. */
+    static boolean godotProject(String path) {
+        if (path == null || path.isEmpty()) {
+            return false;
+        }
+        try {
+            Path dir = Path.of(path);
+            if (Files.isRegularFile(dir) || !Files.isDirectory(dir)) {
+                dir = dir.getParent();
+            }
+            for (int i = 0; i < 8 && dir != null; i++) {
+                if (Files.isRegularFile(dir.resolve("project.godot"))) {
+                    return true;
+                }
+                dir = dir.getParent();
+            }
+        } catch (RuntimeException ignored) {
+        }
+        return false;
     }
 
     public static List<Diagnostic> checkFile(Path path) throws IOException {

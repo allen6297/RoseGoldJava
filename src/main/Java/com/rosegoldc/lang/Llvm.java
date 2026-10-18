@@ -16,13 +16,17 @@ final class Llvm {
     }
 
     static String emit(Checker checker) {
-        return emit(checker, false);
+        return emit(checker, false, false);
     }
 
     static String emit(Checker checker, boolean test) {
+        return emit(checker, test, false);
+    }
+
+    static String emit(Checker checker, boolean test, boolean godot) {
         StringBuilder ir = new StringBuilder();
         ir.append("; RoseGold LLVM snapshot - RGValue is { i8 kind, i64 bits, ptr }\n");
-        ir.append("; kind: 0 void, 1 bool, 2 int, 3 float, 4 string, 5 array, 6 range, 7 map, 8 struct, 9 enum type, 10 enum, 11 fn, 12 future, 13 signal\n");
+        ir.append("; kind: 0 void, 1 bool, 2 int, 3 float, 4 string, 5 array, 6 range, 7 map, 8 struct, 9 enum type, 10 enum, 11 fn, 12 future, 13 signal, 14 object\n");
         ir.append("; link with native/runtime.c\n\n");
         ir.append("%RGValue = type { i8, i64, ptr }\n\n");
         ir.append("declare void @rg_set_void(ptr)\n");
@@ -68,11 +72,16 @@ final class Llvm {
         ir.append("declare void @rg_spawn(ptr, ptr, ptr, i32)\n");
         ir.append("declare void @rg_await(ptr, ptr)\n");
         ir.append("declare void @rg_signal(ptr, ptr, i32)\n");
+        ir.append("declare void @rg_godot_singleton(ptr, ptr)\n");
+        ir.append("declare void @rg_godot_static(ptr, ptr, ptr, ptr, i32)\n");
         ir.append("declare void @rg_register_type_signal(ptr, ptr, i32)\n");
         ir.append("declare void @rg_flush_deferred()\n");
         ir.append("declare void @rg_host_call(ptr, ptr, ptr, ptr, i32)\n");
-        ir.append("declare void @rg_set_argv(i32, ptr)\n\n");
+        ir.append("declare void @rg_set_argv(i32, ptr)\n");
+        ir.append("declare void @rg_godot_bind(ptr, i64)\n");
+        ir.append("declare void @rg_godot_call(ptr, ptr, ptr, i32)\n\n");
         Selection sel = select(checker);
+        GodotScript.Model godotModel = godot ? GodotScript.model(checker) : null;
         Map<String, List<String>> layouts = layouts(checker);
         List<String> strings = new ArrayList<>();
         for (FnDecl fn : checker.fns.values()) {
@@ -107,6 +116,11 @@ final class Llvm {
         }
         internTypeSignals(checker, strings);
         internEnums(checker, strings);
+        if (godotModel != null) {
+            internString(strings, "");
+            Set<String> godotTypes = new LinkedHashSet<>();
+            GodotScript.internDefaults(checker, godotModel.className, strings, godotTypes);
+        }
         if (test) {
             for (String name : testFns(checker, sel)) {
                 internString(strings, name);
@@ -117,6 +131,19 @@ final class Llvm {
         for (FnDecl lam : lambdas.order) {
             if (lam.code != null) {
                 collectStrings(lam.code, strings);
+            }
+        }
+        for (String key : sel.methods) {
+            FnDecl fn = typeMethod(checker, key);
+            if (godotStub(fn)) {
+                internString(strings, methodName(key));
+            }
+        }
+        for (Map.Entry<String, Map<String, FnDecl>> type : checker.staticMethods.entrySet()) {
+            for (FnDecl fn : type.getValue().values()) {
+                if (fn.code != null && !godotStub(fn)) {
+                    collectStrings(fn.code, strings);
+                }
             }
         }
         for (int i = 0; i < strings.size(); i++) {
@@ -137,6 +164,13 @@ final class Llvm {
                 collectStructTypes(fn.code, usedStructs);
             }
         }
+        for (Map.Entry<String, Map<String, FnDecl>> type : checker.staticMethods.entrySet()) {
+            for (FnDecl fn : type.getValue().values()) {
+                if (fn.code != null && !godotStub(fn)) {
+                    collectStructTypes(fn.code, usedStructs);
+                }
+            }
+        }
         for (String key : sel.modFns) {
             FnDecl fn = moduleFnKey(checker, key);
             if (fn != null && fn.code != null) {
@@ -147,6 +181,11 @@ final class Llvm {
             if (lam.code != null) {
                 collectStructTypes(lam.code, usedStructs);
             }
+        }
+        if (godotModel != null) {
+            Set<String> godotTypes = new LinkedHashSet<>();
+            GodotScript.internDefaults(checker, godotModel.className, strings, godotTypes);
+            usedStructs.addAll(godotTypes);
         }
         for (String type : usedStructs) {
             emitFieldTable(ir, type, layouts.getOrDefault(type, List.of()), strings);
@@ -188,9 +227,24 @@ final class Llvm {
             if (fn == null || fn.code == null) {
                 continue;
             }
-            emitFn(ir, fn.code, strings, mangleMethod(methodType(key), methodName(key)), checker, layouts, lambdas,
-                    fn.code.arity, dbg, fn);
+            if (godotStub(fn)) {
+                emitGodotForward(ir, methodType(key), methodName(key), strings);
+            } else {
+                emitFn(ir, fn.code, strings, mangleMethod(methodType(key), methodName(key)), checker, layouts, lambdas,
+                        fn.code.arity, dbg, fn);
+            }
             ir.append('\n');
+        }
+        for (Map.Entry<String, Map<String, FnDecl>> type : checker.staticMethods.entrySet()) {
+            for (Map.Entry<String, FnDecl> m : type.getValue().entrySet()) {
+                FnDecl fn = m.getValue();
+                if (fn.code == null || godotStub(fn) || !opsOk(fn.code, checker)) {
+                    continue;
+                }
+                emitFn(ir, fn.code, strings, mangleMethod(type.getKey(), m.getKey()), checker, layouts, lambdas,
+                        fn.code.arity, dbg, fn);
+                ir.append('\n');
+            }
         }
         for (FnDecl lam : lambdas.order) {
             if (lam.code == null) {
@@ -202,7 +256,7 @@ final class Llvm {
         }
         boolean needInit = !sel.methods.isEmpty() || !checker.enums.isEmpty() || !checker.classParents.isEmpty()
                 || hasTypeSignals(checker);
-        if (needInit) {
+        if (needInit || godotModel != null) {
             ir.append("define void @rg_init_methods() {\n");
             ir.append("entry:\n");
             for (String key : sel.methods) {
@@ -228,7 +282,9 @@ final class Llvm {
             ir.append("  ret void\n");
             ir.append("}\n\n");
         }
-        if (test) {
+        if (godotModel != null) {
+            emitGodotNew(ir, checker, godotModel, layouts, strings);
+        } else if (test) {
             emitTestMain(ir, checker, sel, strings, needInit);
         } else if (sel.fns.contains("main")) {
             ir.append("define i32 @main(i32 %argc, ptr %argv) {\n");
@@ -271,6 +327,134 @@ final class Llvm {
             }
         }
         return tests;
+    }
+
+    private static boolean godotStub(FnDecl fn) {
+        if (fn == null || fn.file == null || fn.file.isEmpty()) {
+            return false;
+        }
+        String path = fn.file.replace('\\', '/');
+        return path.endsWith("/godot/lib.rg");
+    }
+
+    private static void emitGodotForward(StringBuilder ir, String type, String method, List<String> strings) {
+        int id = internString(strings, method == null ? "" : method);
+        ir.append("define void @").append(mangleMethod(type, method)).append("(ptr %out, ptr %args, i32 %argc) {\n");
+        ir.append("entry:\n");
+        ir.append("  call void @rg_godot_call(ptr %out, ptr @str").append(id).append(", ptr %args, i32 %argc)\n");
+        ir.append("  ret void\n");
+        ir.append("}\n");
+    }
+
+    private static void emitGodotNew(StringBuilder ir, Checker checker, GodotScript.Model model,
+            Map<String, List<String>> layouts, List<String> strings) {
+        int[] seq = {0};
+        ir.append("define void @rg_godot_new(i64 %object_id, ptr %dest) {\n");
+        ir.append("entry:\n");
+        emitGodotStruct(ir, checker, model.className, null, "%dest", layouts, strings, seq);
+        ir.append("  call void @rg_godot_bind(ptr %dest, i64 %object_id)\n");
+        ir.append("  ret void\n");
+        ir.append("}\n\n");
+    }
+
+    private static void emitGodotStruct(StringBuilder ir, Checker checker, String type, Expr lit, String dest,
+            Map<String, List<String>> layouts, List<String> strings, int[] seq) {
+        List<String> fields = layouts.getOrDefault(type, List.of());
+        int typeId = internString(strings, type);
+        int isData = checker.isDataType(type) ? 1 : 0;
+        String fieldPtr = fields.isEmpty() ? "null" : "@fields_" + ident(type);
+        if (fields.isEmpty()) {
+            ir.append("  call void @rg_struct(ptr ").append(dest).append(", ptr @str").append(typeId)
+                    .append(", ptr null, i32 0, ptr ").append(fieldPtr).append(", i32 ").append(isData)
+                    .append(")\n");
+            return;
+        }
+        String slots = "%gs" + seq[0]++;
+        ir.append("  ").append(slots).append(" = alloca [").append(fields.size()).append(" x %RGValue]\n");
+        Map<String, Expr> defs = checker.fieldDefaults.get(type);
+        for (int i = 0; i < fields.size(); i++) {
+            String field = fields.get(i);
+            String slot = "%gp" + seq[0]++;
+            ir.append("  ").append(slot).append(" = getelementptr inbounds [").append(fields.size())
+                    .append(" x %RGValue], ptr ").append(slots).append(", i32 0, i32 ").append(i).append("\n");
+            Expr value = structLitField(lit, field);
+            if (value == null && defs != null) {
+                value = defs.get(field);
+            }
+            String fieldType = "";
+            StructDecl st = checker.allTypes.get(type);
+            if (st != null) {
+                fieldType = st.typeOfField(field);
+            }
+            emitGodotValue(ir, checker, value, fieldType, slot, layouts, strings, seq);
+        }
+        ir.append("  call void @rg_struct(ptr ").append(dest).append(", ptr @str").append(typeId)
+                .append(", ptr ").append(slots).append(", i32 ").append(fields.size())
+                .append(", ptr ").append(fieldPtr).append(", i32 ").append(isData).append(")\n");
+    }
+
+    private static Expr structLitField(Expr lit, String field) {
+        if (lit == null || lit.kind != Expr.Kind.StructLit) {
+            return null;
+        }
+        for (int i = 0; i < lit.names.size() && i < lit.kids.size(); i++) {
+            if (field.equals(lit.names.get(i))) {
+                return lit.kids.get(i);
+            }
+        }
+        return null;
+    }
+
+    private static void emitGodotValue(StringBuilder ir, Checker checker, Expr e, String type, String dest,
+            Map<String, List<String>> layouts, List<String> strings, int[] seq) {
+        if (e == null) {
+            emitGodotZero(ir, type, dest, strings);
+            return;
+        }
+        switch (e.kind) {
+            case Int -> ir.append("  call void @rg_set_int(ptr ").append(dest).append(", i64 ").append(e.number)
+                    .append(")\n");
+            case Float -> ir.append("  call void @rg_set_float(ptr ").append(dest).append(", double ")
+                    .append(llvmDouble(e.real)).append(")\n");
+            case Bool -> ir.append("  call void @rg_set_bool(ptr ").append(dest).append(", i32 ")
+                    .append(e.booleanValue ? 1 : 0).append(")\n");
+            case String -> {
+                int id = internString(strings, e.text);
+                ir.append("  call void @rg_set_string(ptr ").append(dest).append(", ptr @str").append(id)
+                        .append(")\n");
+            }
+            case StructLit -> emitGodotStruct(ir, checker, e.text, e, dest, layouts, strings, seq);
+            default -> emitGodotZero(ir, type, dest, strings);
+        }
+    }
+
+    private static void emitGodotZero(StringBuilder ir, String type, String dest, List<String> strings) {
+        String head = Types.typeHead(type == null ? "" : type);
+        switch (head) {
+            case "Int" -> ir.append("  call void @rg_set_int(ptr ").append(dest).append(", i64 0)\n");
+            case "Float" -> ir.append("  call void @rg_set_float(ptr ").append(dest).append(", double 0.0)\n");
+            case "Bool" -> ir.append("  call void @rg_set_bool(ptr ").append(dest).append(", i32 0)\n");
+            case "String" -> {
+                int id = internString(strings, "");
+                ir.append("  call void @rg_set_string(ptr ").append(dest).append(", ptr @str").append(id)
+                        .append(")\n");
+            }
+            default -> ir.append("  call void @rg_set_void(ptr ").append(dest).append(")\n");
+        }
+    }
+
+    private static String llvmDouble(double x) {
+        if (Double.isNaN(x)) {
+            return "0x7FF8000000000000";
+        }
+        if (Double.isInfinite(x)) {
+            return x > 0 ? "0x7FF0000000000000" : "0xFFF0000000000000";
+        }
+        String s = Double.toString(x);
+        if (s.indexOf('.') < 0 && s.indexOf('E') < 0 && s.indexOf('e') < 0) {
+            return s + ".0";
+        }
+        return s;
     }
 
     private static void emitTestMain(StringBuilder ir, Checker checker, Selection sel, List<String> strings,
@@ -472,7 +656,7 @@ final class Llvm {
                 case LOAD_CONST, MOVE, CALL, RET, RET_VOID, DEBUG, BIN, UNARY, TRUTHY, JUMP, JUMP_F, JUMP_T,
                      ARRAY, RANGE, INDEX_GET, INDEX_SET, ITER_ITEMS, LEN, MAP, METHOD, STRUCT, MEMBER, FIELD_SET,
                      LOAD_ENUM, MATCH_LIT, MATCH_VAR, PAYLOAD, CLOSURE, CALL_VAL, LOAD_FN, THROW, AWAIT, SUPER,
-                     LOAD_SIGNAL -> {
+                     LOAD_SIGNAL, LOAD_SINGLETON, STATIC -> {
                 }
                 default -> {
                     return false;
@@ -489,9 +673,15 @@ final class Llvm {
                 }
             }
             if (in.op == Bytecode.Op.CALL && in.module != null && !in.module.isEmpty()) {
-                if (!isHostCall(in.module, in.s) && moduleFn(checker, in.module, in.s) == null) {
+                if (!isHostCall(in.module, in.s) && moduleFn(checker, in.module, in.s) == null
+                        && checker.lookupStatic(in.module, in.s).fn == null) {
                     return false;
                 }
+            }
+            if (in.op == Bytecode.Op.STATIC
+                    && (in.s == null || in.s.isEmpty() || in.module == null || in.module.isEmpty()
+                            || checker.lookupStatic(in.module, in.s).fn == null)) {
+                return false;
             }
             if (in.op == Bytecode.Op.BIN && binOpId(in.s) < 0) {
                 return false;
@@ -510,6 +700,10 @@ final class Llvm {
             }
             if (in.op == Bytecode.Op.LOAD_SIGNAL
                     && (in.s == null || in.s.isEmpty() || !checker.signalArity.containsKey(in.s))) {
+                return false;
+            }
+            if (in.op == Bytecode.Op.LOAD_SINGLETON
+                    && (in.s == null || in.s.isEmpty() || !checker.singletons.contains(in.s))) {
                 return false;
             }
             if (in.op == Bytecode.Op.CLOSURE) {
@@ -541,7 +735,7 @@ final class Llvm {
                     continue;
                 }
                 if (!mod.isEmpty()) {
-                    if (sel.modFns.contains(mod + "." + in.s)) {
+                    if (sel.modFns.contains(mod + "." + in.s) || checker.lookupStatic(mod, in.s).fn != null) {
                         continue;
                     }
                     return false;
@@ -1294,6 +1488,23 @@ final class Llvm {
                         .append(", i32 ").append(arity == null ? 0 : arity).append(")\n");
                 return false;
             }
+            case LOAD_SINGLETON -> {
+                ir.append(slot(nregs, in.a, tmp));
+                int id = internString(strings, in.s == null ? "" : in.s);
+                ir.append("  call void @rg_godot_singleton(ptr ").append(last(tmp)).append(", ptr @str").append(id)
+                        .append(")\n");
+                return false;
+            }
+            case STATIC -> {
+                ir.append(slot(nregs, in.a, tmp));
+                ir.append(slot(nregs, in.b, tmp));
+                int cls = internString(strings, in.module == null ? "" : in.module);
+                int name = internString(strings, in.s == null ? "" : in.s);
+                ir.append("  call void @rg_godot_static(ptr %slot").append(tmp[0] - 2).append(", ptr @str").append(cls)
+                        .append(", ptr @str").append(name).append(", ptr %slot").append(tmp[0] - 1)
+                        .append(", i32 ").append(in.c).append(")\n");
+                return false;
+            }
             case MATCH_LIT -> {
                 ir.append(slot(nregs, in.a, tmp));
                 ir.append(slot(nregs, in.b, tmp));
@@ -1463,11 +1674,12 @@ final class Llvm {
             if (in.op == Bytecode.Op.STRUCT || in.op == Bytecode.Op.MEMBER || in.op == Bytecode.Op.FIELD_SET
                     || in.op == Bytecode.Op.METHOD || in.op == Bytecode.Op.LOAD_ENUM
                     || in.op == Bytecode.Op.MATCH_VAR || in.op == Bytecode.Op.PAYLOAD
-                    || in.op == Bytecode.Op.LOAD_SIGNAL || in.op == Bytecode.Op.CALL) {
+                    || in.op == Bytecode.Op.LOAD_SIGNAL || in.op == Bytecode.Op.LOAD_SINGLETON
+                    || in.op == Bytecode.Op.CALL || in.op == Bytecode.Op.STATIC) {
                 if (in.s != null && !in.s.isEmpty()) {
                     internString(strings, in.s);
                 }
-                if (in.op == Bytecode.Op.CALL) {
+                if (in.op == Bytecode.Op.CALL || in.op == Bytecode.Op.STATIC) {
                     internString(strings, in.module == null ? "" : in.module);
                 }
             }
@@ -1513,20 +1725,6 @@ final class Llvm {
             }
         }
         return ss.toString();
-    }
-
-    private static String llvmDouble(double x) {
-        if (Double.isNaN(x)) {
-            return "0x7FF8000000000000";
-        }
-        if (Double.isInfinite(x)) {
-            return x > 0 ? "0x7FF0000000000000" : "0xFFF0000000000000";
-        }
-        String hex = Long.toHexString(Double.doubleToRawLongBits(x)).toUpperCase();
-        while (hex.length() < 16) {
-            hex = "0" + hex;
-        }
-        return "0x" + hex;
     }
 
     static String ident(String name) {
@@ -1644,16 +1842,22 @@ final class Llvm {
         }
 
         private int fileId(String path) {
-            String raw = path == null || path.isEmpty() ? "unknown.rg" : path.replace('\\', '/');
-            Integer hit = files.get(raw);
+            String raw = path == null || path.isEmpty() ? "unknown.rg" : path;
+            Path p;
+            try {
+                p = Path.of(raw).toAbsolutePath().normalize();
+            } catch (Exception ignored) {
+                p = Path.of(raw.replace('\\', '/'));
+            }
+            String key = p.toString().replace('\\', '/');
+            Integer hit = files.get(key);
             if (hit != null) {
                 return hit;
             }
-            Path p = Path.of(raw);
-            String fileName = p.getFileName() == null ? raw : p.getFileName().toString();
+            String fileName = p.getFileName() == null ? key : p.getFileName().toString();
             String dir = p.getParent() == null ? "." : p.getParent().toString().replace('\\', '/');
             int id = add("!DIFile(filename: \"" + esc(fileName) + "\", directory: \"" + esc(dir) + "\")");
-            files.put(raw, id);
+            files.put(key, id);
             return id;
         }
 

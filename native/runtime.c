@@ -58,6 +58,7 @@ typedef struct RGStruct {
     int32_t csigs;
     char **sig_names;
     struct RGSignal **sigs;
+    int64_t object_id;
 } RGStruct;
 
 typedef void (*RGFn)(RGValue *out, RGValue *args, int32_t argc);
@@ -101,6 +102,7 @@ typedef struct RGSignal {
     int32_t nlisten;
     int32_t clisten;
     RGValue *listeners;
+    int64_t object_id;
 } RGSignal;
 
 typedef struct RGTypeSigReg {
@@ -209,6 +211,14 @@ static const char *g_clip = "";
 static int32_t g_argc;
 static char **g_argv;
 static int32_t g_rng_seeded;
+static RGSlotGet g_slot_get;
+static RGSlotPut g_slot_put;
+static RGSlotDel g_slot_del;
+static RGGodotSignalFn g_godot_signal;
+static RGGodotCallFn g_godot_call;
+static RGGodotFnFn g_godot_fn;
+static RGGodotValueFn g_godot_value;
+static RGGodotPropFn g_godot_prop;
 
 void rg_set_void(RGValue *v) {
     if (v == NULL) {
@@ -1076,6 +1086,19 @@ void rg_iter_items(RGValue *dest, const RGValue *iter) {
     rg_die("cannot iterate over value");
 }
 
+void rg_map_key_at(RGValue *dest, const RGValue *map, int32_t index) {
+    RGMap *m;
+    if (dest == NULL) {
+        return;
+    }
+    m = rg_as_map(map);
+    if (m == NULL || index < 0 || index >= m->len || m->entries == NULL) {
+        rg_set_void(dest);
+        return;
+    }
+    rg_set_string(dest, m->entries[index].key != NULL ? m->entries[index].key : "");
+}
+
 void rg_len(RGValue *dest, const RGValue *src) {
     if (dest == NULL) {
         return;
@@ -1278,6 +1301,7 @@ void rg_struct(RGValue *dest, const char *name, RGValue *base, int32_t n, const 
     s->csigs = 0;
     s->sig_names = NULL;
     s->sigs = NULL;
+    s->object_id = 0;
     if (n > 0) {
         s->fields = (char **) calloc((size_t) n, sizeof(char *));
         s->values = (RGValue *) calloc((size_t) n, sizeof(RGValue));
@@ -1294,6 +1318,256 @@ void rg_struct(RGValue *dest, const char *name, RGValue *base, int32_t n, const 
     dest->p = (const char *) s;
 }
 
+void rg_set_object(RGValue *v, int64_t object_id) {
+    if (v == NULL) {
+        return;
+    }
+    v->kind = RG_OBJECT;
+    v->i = object_id;
+    v->p = NULL;
+}
+
+int64_t rg_object_id(const RGValue *v) {
+    if (v == NULL || v->kind != RG_OBJECT) {
+        return 0;
+    }
+    return v->i;
+}
+
+void *rg_object_ptr(const RGValue *v) {
+    int64_t id = rg_object_id(v);
+    if (id == 0 || g_slot_get == NULL) {
+        return NULL;
+    }
+    return g_slot_get(id);
+}
+
+void rg_object_bind_slots(RGSlotGet get, RGSlotPut put, RGSlotDel del) {
+    g_slot_get = get;
+    g_slot_put = put;
+    g_slot_del = del;
+}
+
+void rg_set_godot_signal(RGGodotSignalFn fn) {
+    g_godot_signal = fn;
+}
+
+void rg_set_godot_call(RGGodotCallFn fn) {
+    g_godot_call = fn;
+}
+
+void rg_set_godot_fn(RGGodotFnFn fn) {
+    g_godot_fn = fn;
+}
+
+void rg_set_godot_value(RGGodotValueFn fn) {
+    g_godot_value = fn;
+}
+
+static RGGodotSingletonFn g_godot_singleton;
+static RGGodotStaticFn g_godot_static;
+
+void rg_set_godot_singleton(RGGodotSingletonFn fn) {
+    g_godot_singleton = fn;
+}
+
+void rg_godot_singleton(RGValue *dest, const char *name) {
+    if (dest == NULL) {
+        return;
+    }
+    rg_set_void(dest);
+    if (g_godot_singleton != NULL && name != NULL && name[0] != '\0') {
+        g_godot_singleton(dest, name);
+    }
+}
+
+void rg_set_godot_static(RGGodotStaticFn fn) {
+    g_godot_static = fn;
+}
+
+void rg_godot_static(RGValue *dest, const char *class_name, const char *method, RGValue *args, int32_t argc) {
+    if (dest == NULL) {
+        return;
+    }
+    rg_set_void(dest);
+    if (g_godot_static == NULL || class_name == NULL || method == NULL) {
+        return;
+    }
+    if (argc < 0) {
+        argc = 0;
+    }
+    g_godot_static(class_name, method, args, argc, dest);
+}
+
+void rg_set_godot_prop(RGGodotPropFn fn) {
+    g_godot_prop = fn;
+}
+
+#define RG_PROP_SLOTS 32
+
+typedef struct RGPropSlot {
+    int64_t id;
+    char *name;
+    RGValue value;
+    uint32_t epoch;
+    int used;
+} RGPropSlot;
+
+static RGPropSlot g_props[RG_PROP_SLOTS];
+static uint32_t g_prop_epoch;
+
+static int rg_live_prop(const char *name) {
+    return name != NULL && (strcmp(name, "position") == 0 || strcmp(name, "rotation") == 0
+            || strcmp(name, "scale") == 0);
+}
+
+static RGPropSlot *rg_prop_find(int64_t id, const char *name, int create) {
+    int i;
+    int free_i = -1;
+    for (i = 0; i < RG_PROP_SLOTS; i++) {
+        if (!g_props[i].used) {
+            if (free_i < 0) {
+                free_i = i;
+            }
+            continue;
+        }
+        if (g_props[i].id == id && g_props[i].name != NULL && strcmp(g_props[i].name, name) == 0) {
+            return &g_props[i];
+        }
+    }
+    if (!create || free_i < 0 || name == NULL) {
+        return NULL;
+    }
+    g_props[free_i].used = 1;
+    g_props[free_i].id = id;
+    g_props[free_i].name = strdup(name);
+    g_props[free_i].epoch = 0;
+    rg_set_void(&g_props[free_i].value);
+    return &g_props[free_i];
+}
+
+void rg_godot_props_begin(void) {
+    g_prop_epoch++;
+    if (g_prop_epoch == 0) {
+        g_prop_epoch = 1;
+    }
+}
+
+static void rg_prop_read(int64_t id, const char *name, RGValue *dest) {
+    RGPropSlot *slot = rg_prop_find(id, name, 1);
+    if (slot == NULL || g_godot_prop == NULL) {
+        rg_set_void(dest);
+        return;
+    }
+    if (slot->epoch != g_prop_epoch) {
+        g_godot_prop(id, name, &slot->value, 0);
+        slot->epoch = g_prop_epoch;
+    }
+    rg_copy(dest, &slot->value);
+}
+
+static void rg_prop_write_value(int64_t id, const char *name, const RGValue *val) {
+    RGPropSlot *slot = rg_prop_find(id, name, 1);
+    if (slot == NULL) {
+        return;
+    }
+    rg_copy(&slot->value, val);
+    slot->epoch = g_prop_epoch;
+    if (g_godot_prop != NULL) {
+        g_godot_prop(id, name, &slot->value, 1);
+    }
+}
+
+static void rg_prop_write_struct(RGStruct *s) {
+    int i;
+    if (g_godot_prop == NULL || s == NULL) {
+        return;
+    }
+    for (i = 0; i < RG_PROP_SLOTS; i++) {
+        if (!g_props[i].used || g_props[i].value.kind != RG_STRUCT) {
+            continue;
+        }
+        if (rg_as_struct(&g_props[i].value) == s) {
+            g_godot_prop(g_props[i].id, g_props[i].name, &g_props[i].value, 1);
+        }
+    }
+}
+
+const char *rg_struct_name(const RGValue *v) {
+    RGStruct *s = rg_as_struct(v);
+    if (s == NULL || s->name == NULL) {
+        return "";
+    }
+    return s->name;
+}
+
+int32_t rg_struct_has(const RGValue *v, const char *name) {
+    RGStruct *s = rg_as_struct(v);
+    if (s == NULL) {
+        return 0;
+    }
+    return rg_struct_find(s, name != NULL ? name : "") >= 0;
+}
+
+void rg_godot_call(RGValue *dest, const char *name, RGValue *args, int32_t argc) {
+    int64_t id = 0;
+    const RGValue *rest = NULL;
+    int32_t n = 0;
+    if (dest == NULL) {
+        return;
+    }
+    rg_set_void(dest);
+    if (name == NULL) {
+        name = "";
+    }
+    if (argc < 0) {
+        argc = 0;
+    }
+    if (args != NULL && argc > 0) {
+        if (args[0].kind == RG_OBJECT) {
+            id = args[0].i;
+        } else {
+            RGStruct *s = rg_as_struct(&args[0]);
+            if (s != NULL) {
+                id = s->object_id;
+            }
+        }
+        if (argc > 1) {
+            rest = &args[1];
+            n = argc - 1;
+        }
+    }
+    if (g_godot_call != NULL && id != 0) {
+        g_godot_call(id, name, rest, n, dest);
+    }
+}
+
+void rg_godot_bind(RGValue *inst, int64_t object_id) {
+    RGStruct *s = rg_as_struct(inst);
+    int32_t i;
+    if (s == NULL) {
+        return;
+    }
+    s->object_id = object_id;
+    for (i = 0; i < s->nsigs; i++) {
+        if (s->sigs[i] != NULL) {
+            s->sigs[i]->object_id = object_id;
+        }
+    }
+}
+
+void rg_object_slot_put(int64_t id, void *ptr) {
+    if (g_slot_put != NULL) {
+        g_slot_put(id, ptr);
+    }
+}
+
+void rg_object_slot_del(int64_t id) {
+    if (g_slot_del != NULL) {
+        g_slot_del(id);
+    }
+}
+
 void rg_member(RGValue *dest, const RGValue *obj, const char *name) {
     if (dest == NULL) {
         return;
@@ -1308,6 +1582,10 @@ void rg_member(RGValue *dest, const RGValue *obj, const char *name) {
     }
     if (obj != NULL && obj->kind == RG_ENUM_TYPE) {
         rg_make_enum(dest, obj->p, name, NULL, 0);
+        return;
+    }
+    if (obj != NULL && obj->kind == RG_OBJECT) {
+        rg_prop_read(obj->i, name, dest);
         return;
     }
     RGStruct *s = rg_as_struct(obj);
@@ -1331,12 +1609,17 @@ void rg_member(RGValue *dest, const RGValue *obj, const char *name) {
 }
 
 void rg_field_set(RGValue *obj, const char *name, const RGValue *val) {
-    RGStruct *s = rg_as_struct(obj);
-    if (s == NULL) {
-        rg_die("cannot assign field on value");
-    }
+    RGStruct *s;
     if (name == NULL) {
         name = "";
+    }
+    if (obj != NULL && obj->kind == RG_OBJECT) {
+        rg_prop_write_value(obj->i, name, val);
+        return;
+    }
+    s = rg_as_struct(obj);
+    if (s == NULL) {
+        rg_die("cannot assign field on value");
     }
     int32_t i = rg_struct_find(s, name);
     if (i < 0) {
@@ -1348,6 +1631,7 @@ void rg_field_set(RGValue *obj, const char *name, const RGValue *val) {
         exit(1);
     }
     rg_copy(&s->values[i], val);
+    rg_prop_write_struct(s);
 }
 
 void rg_register_method(const char *type, const char *method, void (*fn)(RGValue *, RGValue *, int32_t)) {
@@ -1441,6 +1725,20 @@ void rg_call_method(RGValue *dest, RGValue *base, int32_t argc, const char *name
         name = "";
     }
     RGValue *recv = &base[0];
+    if (recv->kind == RG_FN) {
+        if (g_godot_fn != NULL) {
+            g_godot_fn(recv, name, argc > 1 ? &base[1] : NULL, argc > 1 ? argc - 1 : 0, dest);
+            return;
+        }
+        rg_die("cannot call method on value");
+    }
+    if (recv->kind == RG_OBJECT) {
+        if (g_godot_call != NULL && recv->i != 0) {
+            g_godot_call(recv->i, name, argc > 1 ? &base[1] : NULL, argc > 1 ? argc - 1 : 0, dest);
+            return;
+        }
+        rg_die("cannot call method on value");
+    }
     if (recv->kind == RG_SIGNAL) {
         rg_signal_method(dest, base, argc, name);
         return;
@@ -1459,8 +1757,15 @@ void rg_call_method(RGValue *dest, RGValue *base, int32_t argc, const char *name
     if (recv->kind == RG_STRUCT) {
         RGStruct *s = rg_as_struct(recv);
         const char *type = s != NULL && s->name != NULL ? s->name : "";
+        if (g_godot_value != NULL && g_godot_value(type, recv, name, argc > 1 ? &base[1] : NULL, argc > 1 ? argc - 1 : 0, dest)) {
+            return;
+        }
         RGFn fn = rg_lookup_method(type, name);
         if (fn == NULL) {
+            if (g_godot_call != NULL && s->object_id != 0) {
+                g_godot_call(s->object_id, name, argc > 1 ? &base[1] : NULL, argc > 1 ? argc - 1 : 0, dest);
+                return;
+            }
             fprintf(stderr, "struct %s has no method '%s'\n", type, name);
             exit(1);
         }
@@ -1689,6 +1994,41 @@ void rg_fn_ref(RGValue *dest, void (*fn)(RGValue *, RGValue *, int32_t), int32_t
     dest->p = (const char *) f;
 }
 
+void rg_fn_host(RGValue *dest, void (*fn)(RGValue *, RGValue *, int32_t), int64_t id) {
+    RGFnVal *f;
+    if (dest == NULL) {
+        return;
+    }
+    rg_set_void(dest);
+    if (fn == NULL) {
+        return;
+    }
+    f = (RGFnVal *) malloc(sizeof(RGFnVal));
+    if (f == NULL) {
+        rg_die("out of memory");
+    }
+    f->fn = fn;
+    f->arity = -1;
+    f->ncaps = 1;
+    f->caps = (RGValue *) calloc(1, sizeof(RGValue));
+    if (f->caps == NULL) {
+        rg_die("out of memory");
+    }
+    f->caps[0].kind = RG_INT;
+    f->caps[0].i = id;
+    dest->kind = RG_FN;
+    dest->i = 0;
+    dest->p = (const char *) f;
+}
+
+int64_t rg_fn_host_id(const RGValue *v) {
+    RGFnVal *f = rg_as_fn(v);
+    if (f == NULL || f->arity >= 0 || f->ncaps < 1 || f->caps == NULL) {
+        return -1;
+    }
+    return f->caps[0].i;
+}
+
 void rg_closure(RGValue *dest, void (*fn)(RGValue *, RGValue *, int32_t), int32_t arity, RGValue *caps, int32_t ncaps) {
     if (dest == NULL) {
         return;
@@ -1730,22 +2070,23 @@ void rg_call_val(RGValue *dest, RGValue *base, int32_t argc) {
         rg_die("can only call a function");
     }
     int32_t nargs = argc - 1;
-    if (nargs != f->arity) {
+    int32_t take = f->arity < 0 ? nargs : f->arity;
+    if (f->arity >= 0 && nargs != f->arity) {
         fprintf(stderr, "<fn> takes %d argument(s)\n", (int) f->arity);
         exit(1);
     }
-    int32_t total = f->arity + f->ncaps;
+    int32_t total = take + f->ncaps;
     RGValue *frame = NULL;
     if (total > 0) {
         frame = (RGValue *) malloc((size_t) total * sizeof(RGValue));
         if (frame == NULL) {
             rg_die("out of memory");
         }
-        for (int32_t i = 0; i < f->arity; i++) {
+        for (int32_t i = 0; i < take; i++) {
             rg_copy(&frame[i], &base[i + 1]);
         }
         for (int32_t i = 0; i < f->ncaps; i++) {
-            rg_copy(&frame[f->arity + i], f->caps != NULL ? &f->caps[i] : NULL);
+            rg_copy(&frame[take + i], f->caps != NULL ? &f->caps[i] : NULL);
         }
     }
     f->fn(dest, frame, total);
@@ -2162,6 +2503,7 @@ static RGSignal *rg_new_signal(const char *name, int32_t arity) {
     sig->nlisten = 0;
     sig->clisten = 0;
     sig->listeners = NULL;
+    sig->object_id = 0;
     return sig;
 }
 
@@ -2228,11 +2570,12 @@ static RGSignal *rg_struct_signal(RGStruct *s, const char *name) {
     }
     s->sig_names[s->nsigs] = rg_strdup(name);
     s->sigs[s->nsigs] = rg_new_signal(name, arity);
+    s->sigs[s->nsigs]->object_id = s->object_id;
     s->nsigs++;
     return s->sigs[s->nsigs - 1];
 }
 
-static int32_t rg_same_fn(const RGValue *a, const RGValue *b) {
+int32_t rg_fn_same(const RGValue *a, const RGValue *b) {
     RGFnVal *fa = rg_as_fn(a);
     RGFnVal *fb = rg_as_fn(b);
     if (fa == NULL || fb == NULL) {
@@ -2242,6 +2585,24 @@ static int32_t rg_same_fn(const RGValue *a, const RGValue *b) {
         return fa == fb;
     }
     return fa->fn == fb->fn && fa->arity == fb->arity;
+}
+
+uint32_t rg_fn_hash(const RGValue *v) {
+    RGFnVal *f = rg_as_fn(v);
+    uintptr_t bits;
+    if (f == NULL) {
+        return 0;
+    }
+    if (f->ncaps > 0) {
+        bits = (uintptr_t) f;
+    } else {
+        bits = (uintptr_t) f->fn ^ (uintptr_t) (uint32_t) f->arity;
+    }
+    return (uint32_t) bits ^ (uint32_t) (bits >> 32);
+}
+
+static int32_t rg_same_fn(const RGValue *a, const RGValue *b) {
+    return rg_fn_same(a, b);
 }
 
 static void rg_signal_emit_now(RGSignal *sig, RGValue *args, int32_t argc) {
@@ -2342,8 +2703,13 @@ static void rg_signal_method(RGValue *dest, RGValue *base, int32_t argc, const c
         if (rg_as_fn(&base[1]) == NULL) {
             rg_die("signal connect expects a function");
         }
-        if (rg_as_fn(&base[1])->arity != sig->arity) {
+        if (rg_as_fn(&base[1])->arity >= 0 && rg_as_fn(&base[1])->arity != sig->arity) {
             rg_die("signal connect expected different arity");
+        }
+        if (g_godot_signal != NULL && sig->object_id != 0) {
+            g_godot_signal(sig->object_id, sig->name, RG_GODOT_CONNECT, &base[1], 1);
+            rg_set_void(dest);
+            return;
         }
         rg_signal_listen_add(sig, &base[1]);
         rg_set_void(dest);
@@ -2356,6 +2722,11 @@ static void rg_signal_method(RGValue *dest, RGValue *base, int32_t argc, const c
         if (rg_as_fn(&base[1]) == NULL) {
             rg_die("signal disconnect expects a function");
         }
+        if (g_godot_signal != NULL && sig->object_id != 0) {
+            g_godot_signal(sig->object_id, sig->name, RG_GODOT_DISCONNECT, &base[1], 1);
+            rg_set_void(dest);
+            return;
+        }
         rg_signal_listen_remove(sig, &base[1]);
         rg_set_void(dest);
         return;
@@ -2363,6 +2734,12 @@ static void rg_signal_method(RGValue *dest, RGValue *base, int32_t argc, const c
     if (strcmp(name, "emit") == 0 || strcmp(name, "emit_deferred") == 0) {
         if (nargs != sig->arity) {
             rg_die("signal emit arity mismatch");
+        }
+        if (g_godot_signal != NULL && sig->object_id != 0) {
+            g_godot_signal(sig->object_id, sig->name, RG_GODOT_EMIT,
+                    nargs > 0 ? &base[1] : NULL, nargs);
+            rg_set_void(dest);
+            return;
         }
         if (strcmp(name, "emit_deferred") == 0) {
             RGDeferred *item = (RGDeferred *) malloc(sizeof(RGDeferred));

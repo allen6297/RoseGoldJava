@@ -19,6 +19,23 @@ public class LlvmNativeTest {
     }
 
     @Test
+    public void secondLinkReusesCachedExe() throws Exception {
+        if (!LlvmLink.canRunClang()) {
+            return;
+        }
+        Checker checker = check(
+                Files.readString(Path.of("examples/hello.rg"), StandardCharsets.UTF_8),
+                "examples/hello.rg");
+        Path nativeDir = LlvmLink.resolveNativeDir(Path.of("").toAbsolutePath());
+        LlvmLink.Result first = LlvmLink.link(checker, nativeDir, nativeOut("cache-a"));
+        assertTrue(first.message, first.ok);
+        LlvmLink.Result second = LlvmLink.link(checker, nativeDir, nativeOut("cache-b"));
+        assertTrue(second.message, second.ok);
+        assertEquals(List.of("(cached)"), second.command);
+        assertTrue(String.valueOf(second.output), Files.isRegularFile(second.output));
+    }
+
+    @Test
     public void control() throws Exception {
         assertNative("examples/control.rg", """
                 1
@@ -352,10 +369,12 @@ public class LlvmNativeTest {
         assertTrue(String.valueOf(nativeDir), LlvmLink.isNativeDir(nativeDir));
         String stem = Path.of(path).getFileName().toString().replace(".rg", "");
         Path out = nativeOut(stem);
-        if (LlvmLink.findClang() == null) {
-            LlvmLink.Result result = LlvmLink.link(checker, nativeDir, out);
-            assertTrue(result.message, !result.ok);
-            assertTrue(result.message, result.message.contains("clang"));
+        if (!LlvmLink.canRunClang()) {
+            if (LlvmLink.findClang() == null) {
+                LlvmLink.Result result = LlvmLink.link(checker, nativeDir, out);
+                assertTrue(result.message, !result.ok);
+                assertTrue(result.message, result.message.contains("clang"));
+            }
             return;
         }
         LlvmLink.Result ran = execNative(checker, nativeDir, stem, argv, false);
@@ -379,10 +398,12 @@ public class LlvmNativeTest {
         assertTrue(String.valueOf(nativeDir), LlvmLink.isNativeDir(nativeDir));
         String stem = Path.of(path).getFileName().toString().replace(".rg", "");
         Path out = nativeOut("test-" + stem);
-        if (LlvmLink.findClang() == null) {
-            LlvmLink.Result result = LlvmLink.link(checker, nativeDir, out, true);
-            assertTrue(result.message, !result.ok);
-            assertTrue(result.message, result.message.contains("clang"));
+        if (!LlvmLink.canRunClang()) {
+            if (LlvmLink.findClang() == null) {
+                LlvmLink.Result result = LlvmLink.link(checker, nativeDir, out, true);
+                assertTrue(result.message, !result.ok);
+                assertTrue(result.message, result.message.contains("clang"));
+            }
             return;
         }
         LlvmLink.Result ran = execNative(checker, nativeDir, "test-" + stem,

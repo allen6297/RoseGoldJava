@@ -105,7 +105,7 @@ public final class RoseGoldPostfixTemplateProvider implements PostfixTemplatePro
 
     private static final class Walk {
         static final int FAIL = Integer.MIN_VALUE;
-        private static final Set<String> ATOMS = Set.of("true", "false", "none", "self");
+        private static final Set<String> ATOMS = Set.of("true", "false", "null", "none", "self");
 
         private final ArrayList<Tok> tokens;
         int exprStart = Integer.MAX_VALUE;

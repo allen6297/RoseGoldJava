@@ -8,7 +8,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-public final class Debug {
+public final class Debug implements DebugEngine {
 
     public enum Mode { Run, Next, StepIn, StepOut }
 

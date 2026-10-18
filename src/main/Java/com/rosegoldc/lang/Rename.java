@@ -8,7 +8,7 @@ import java.util.Set;
 public final class Rename {
 
     private static final Set<String> KEYWORDS = Set.of(
-            "fn", "var", "const", "struct", "data", "class", "trait", "extends",
+            "fn", "var", "const", "export", "struct", "data", "class", "trait", "extends",
             "enum", "mod", "impl", "pub", "private", "protected", "abstract", "final",
             "match", "switch", "for", "in", "super", "signal", "import", "from", "as",
             "return", "pass", "break", "continue", "if", "elif", "else", "while",

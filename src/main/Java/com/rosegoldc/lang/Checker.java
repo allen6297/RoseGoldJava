@@ -29,8 +29,10 @@ final class Checker {
     final Map<String, List<String>> typeTraits = new LinkedHashMap<>();
     final List<TraitImplInfo> traitImpls = new ArrayList<>();
     final Map<String, Map<String, FnDecl>> typeMethods = new LinkedHashMap<>();
+    final Map<String, Map<String, FnDecl>> staticMethods = new LinkedHashMap<>();
     final Map<String, Map<String, Integer>> typeSignals = new LinkedHashMap<>();
     final Map<String, Integer> signalArity = new LinkedHashMap<>();
+    final Set<String> singletons = new HashSet<>();
     final Map<String, LoadedMod> loaded = new LinkedHashMap<>();
     final Map<String, String> moduleBinds = new LinkedHashMap<>();
     final List<Program> extras = new ArrayList<>();
@@ -86,8 +88,16 @@ final class Checker {
     }
 
     static Checker check(Program program, String file, List<Diagnostic> diagnostics) {
+        return check(program, file, diagnostics, false);
+    }
+
+    static Checker check(Program program, String file, List<Diagnostic> diagnostics, boolean godot) {
         Checker env = new Checker(program, file, diagnostics);
         env.ingestEntry();
+        if (godot) {
+            env.loadModule("godot", file, 1, 1);
+            env.loadProjectScripts();
+        }
         env.loadImports(program.imports, file, null);
         env.applyInheritance();
         env.checkTraitImpls();
@@ -416,6 +426,26 @@ final class Checker {
         return new MethodHit("", null);
     }
 
+    MethodHit lookupStatic(String typeName, String name) {
+        String current = Types.typeHead(typeName);
+        Set<String> seen = new HashSet<>();
+        while (!current.isEmpty()) {
+            if (!seen.add(current)) {
+                break;
+            }
+            Map<String, FnDecl> typeIt = staticMethods.get(current);
+            if (typeIt != null && typeIt.containsKey(name)) {
+                return new MethodHit(current, typeIt.get(name));
+            }
+            String pit = classParents.get(current);
+            if (pit == null) {
+                break;
+            }
+            current = Types.typeHead(pit);
+        }
+        return new MethodHit("", null);
+    }
+
     FieldHit lookupField(String typeName, String name) {
         String current = Types.typeHead(typeName);
         Set<String> seen = new HashSet<>();
@@ -434,6 +464,111 @@ final class Checker {
             current = Types.typeHead(pit);
         }
         return new FieldHit("", Vis.Pub);
+    }
+
+    /** Other .rg scripts in the same Godot project are classes this file can extend. */
+    private void loadProjectScripts() {
+        Path root = godotProjectRoot(file);
+        if (root == null) {
+            return;
+        }
+        List<Path> scripts = new ArrayList<>();
+        collectProjectScripts(root, scripts, 0);
+        for (Path script : scripts) {
+            if (sameFile(script, file)) {
+                continue;
+            }
+            ingestProjectScript(script);
+        }
+    }
+
+    private static Path godotProjectRoot(String path) {
+        if (path == null || path.isEmpty()) {
+            return null;
+        }
+        try {
+            Path dir = Path.of(path);
+            if (!Files.isDirectory(dir)) {
+                dir = dir.getParent();
+            }
+            for (int i = 0; i < 8 && dir != null; i++) {
+                if (Files.isRegularFile(dir.resolve("project.godot"))) {
+                    return dir;
+                }
+                dir = dir.getParent();
+            }
+        } catch (RuntimeException ignored) {
+        }
+        return null;
+    }
+
+    private static void collectProjectScripts(Path dir, List<Path> out, int depth) {
+        if (dir == null || depth > 12) {
+            return;
+        }
+        try (java.nio.file.DirectoryStream<Path> stream = Files.newDirectoryStream(dir)) {
+            for (Path child : stream) {
+                String name = child.getFileName() == null ? "" : child.getFileName().toString();
+                if (Files.isDirectory(child)) {
+                    if (name.equals(".godot") || name.equals(".git") || name.equals("bin")) {
+                        continue;
+                    }
+                    collectProjectScripts(child, out, depth + 1);
+                } else if (name.endsWith(".rg")) {
+                    out.add(child);
+                }
+            }
+        } catch (IOException ignored) {
+        }
+    }
+
+    private static boolean sameFile(Path script, String openPath) {
+        if (openPath == null || openPath.isEmpty()) {
+            return false;
+        }
+        try {
+            Path open = Path.of(openPath);
+            if (Files.exists(script) && Files.exists(open) && Files.isSameFile(script, open)) {
+                return true;
+            }
+            return script.toAbsolutePath().normalize().toString().equalsIgnoreCase(open.toAbsolutePath().normalize().toString());
+        } catch (IOException | RuntimeException ex) {
+            return false;
+        }
+    }
+
+    private void ingestProjectScript(Path script) {
+        List<Diagnostic> parseDiags = new ArrayList<>();
+        Program parsed;
+        try {
+            parsed = Parser.parseSource(Files.readString(script, StandardCharsets.UTF_8), script.toString(), parseDiags);
+        } catch (IOException | RuntimeException ex) {
+            return;
+        }
+        for (Diagnostic d : parseDiags) {
+            if ("error".equals(d.severity)) {
+                return;
+            }
+        }
+        keep(parsed);
+        String at = script.toString();
+        for (StructDecl st : parsed.structs) {
+            if (allTypes.containsKey(st.name)) {
+                continue;
+            }
+            structs.put(st.name, st);
+            allTypes.put(st.name, st);
+            recordFieldAccess(st.name, st.fields, st.fieldVis);
+            for (FnDecl method : st.methods) {
+                stampFnFile(method, at);
+                typeMethods.computeIfAbsent(st.name, k -> new LinkedHashMap<>()).put(method.name, method);
+            }
+            registerTypeSignals(st.name, st.signals, at);
+        }
+        ingestClasses(null, parsed.classes, false, "", at);
+        ingestTraits(parsed.traits, at);
+        ingestEnums(null, parsed.enums, false, "", at);
+        ingestImpls(parsed.impls, at);
     }
 
     private void ingestEntry() {
@@ -632,13 +767,15 @@ final class Checker {
             classAbstract.put(c.name, c.isAbstract);
             classFinal.put(c.name, c.isFinal);
             Map<String, FnDecl> slot = typeMethods.computeIfAbsent(c.name, k -> new LinkedHashMap<>());
+            Map<String, FnDecl> staticSlot = staticMethods.computeIfAbsent(c.name, k -> new LinkedHashMap<>());
             for (FnDecl method : c.methods) {
                 method.module = modName;
                 stampFnFile(method, atFile);
-                if (slot.containsKey(method.name)) {
+                Map<String, FnDecl> dest = method.isStatic ? staticSlot : slot;
+                if (dest.containsKey(method.name) || slot.containsKey(method.name) || staticSlot.containsKey(method.name)) {
                     loadFail(atFile, "duplicate method '" + method.name + "' on " + c.name, method.line, 1);
                 }
-                slot.put(method.name, method);
+                dest.put(method.name, method);
             }
             for (NestedImpl block : c.traitImpls) {
                 List<TypeParam> params = new ArrayList<>(c.typeParams);
@@ -844,6 +981,7 @@ final class Checker {
             ingestFns(m, block.fns, fromMod, modName, atFile);
             ingestStructs(m, block.structs, fromMod, modName, atFile);
             ingestClasses(m, block.classes, fromMod, modName, atFile);
+            singletons.addAll(p.singletons);
             ingestTraits(block.traits, atFile);
             ingestEnums(m, block.enums, fromMod, modName, atFile, publishGlobal);
             ingestImpls(block.impls, atFile);
@@ -853,6 +991,7 @@ final class Checker {
             ingestFns(m, p.fns, false, modName, atFile);
             ingestStructs(m, p.structs, false, modName, atFile);
             ingestClasses(m, p.classes, false, modName, atFile);
+            singletons.addAll(p.singletons);
             ingestTraits(p.traits, atFile);
             ingestEnums(m, p.enums, false, modName, atFile, publishGlobal);
             ingestImpls(p.impls, atFile);
@@ -931,6 +1070,18 @@ final class Checker {
                 add.accept(path);
             }
         };
+        if ("godot".equals(stem)) {
+            Path dir = Stdlib.godotStubDir(fromFile);
+            if (dir == null) {
+                dir = Stdlib.godotStubDir(file);
+            }
+            if (dir != null) {
+                addDir.accept(dir);
+                if (!out.isEmpty()) {
+                    return out;
+                }
+            }
+        }
         if (Types.isCrateStdlib(stem)) {
             Path root = Stdlib.findStdlibRoot(file);
             if (root == null) {

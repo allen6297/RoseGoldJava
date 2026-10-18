@@ -31,6 +31,8 @@ public final class Parser {
         final FnAttrs attrs = new FnAttrs();
         boolean isAbstract;
         boolean isFinal;
+        boolean isStatic;
+        boolean exported;
         Vis vis = Vis.Pub;
         boolean sawVis;
     }
@@ -360,6 +362,9 @@ public final class Parser {
             e.booleanValue = t.kind == Tok.True;
             return e;
         }
+        if (match(Tok.Null)) {
+            return make(Expr.Kind.Null, t.line, t.col);
+        }
         if (match(Tok.Identifier) || match(Tok.Super)) {
             Expr e = make(Expr.Kind.Var, t.line, t.col);
             e.text = t.kind == Tok.Super ? "super" : t.text;
@@ -581,6 +586,12 @@ public final class Parser {
                 expr = idx;
             } else if (expr.kind == Expr.Kind.Var && isStructLitStart()) {
                 expr = parseStructLit(expr);
+            } else if (match(Tok.As)) {
+                Token op = prev();
+                Expr cast = make(Expr.Kind.Cast, op.line, op.col);
+                cast.text = parseType();
+                cast.kids.add(expr);
+                expr = cast;
             } else {
                 break;
             }
@@ -1035,11 +1046,28 @@ public final class Parser {
     private void fillFnSig(FnDecl fn) {
         expect(Tok.LParen, "expected '('");
         if (!check(Tok.RParen)) {
-            do {
+            boolean seenDefault = false;
+            while (true) {
+                if (match(Tok.Ellipsis)) {
+                    fn.isVararg = true;
+                    break;
+                }
                 Token param = expect(Tok.Identifier, "expected parameter name");
                 fn.paramTypes.add(parseOptionalType());
                 fn.params.add(param.text);
-            } while (match(Tok.Comma));
+                if (match(Tok.Eq)) {
+                    seenDefault = true;
+                    fn.paramDefaults.add(parseExpr());
+                } else {
+                    if (seenDefault) {
+                        errorNote("default arguments must come last");
+                    }
+                    fn.paramDefaults.add(null);
+                }
+                if (!match(Tok.Comma)) {
+                    break;
+                }
+            }
         }
         expect(Tok.RParen, "expected ')'");
         fn.throwsEx = match(Tok.Throws);
@@ -1065,6 +1093,7 @@ public final class Parser {
         if (fn.params.isEmpty() || !fn.params.getFirst().equals("self")) {
             fn.params.addFirst("self");
             fn.paramTypes.addFirst("");
+            fn.paramDefaults.addFirst(null);
         }
     }
 
@@ -1175,6 +1204,14 @@ public final class Parser {
                 p.isFinal = true;
                 continue;
             }
+            if (match(Tok.Static)) {
+                p.isStatic = true;
+                continue;
+            }
+            if (match(Tok.Export)) {
+                p.exported = true;
+                continue;
+            }
             break;
         }
     }
@@ -1213,6 +1250,9 @@ public final class Parser {
                 MemberPrefix p = new MemberPrefix();
                 parseMemberPrefix(p);
                 if (check(Tok.Function) || check(Tok.Async)) {
+                    if (p.isStatic) {
+                        errorNote("static applies to class methods");
+                    }
                     rejectClassMods(p.isAbstract, p.isFinal, kind + " method");
                     if (p.vis == Vis.Protected) {
                         errorNote("protected cannot apply to " + kind + " method");
@@ -1394,6 +1434,12 @@ public final class Parser {
             try {
                 MemberPrefix p = new MemberPrefix();
                 parseMemberPrefix(p);
+                if (p.exported && !check(Tok.Variable)) {
+                    errorNote("export applies to var");
+                }
+                if (p.isStatic && !check(Tok.Function) && !check(Tok.Async)) {
+                    errorNote("static applies to fn");
+                }
                 if (check(Tok.Constant)) {
                     errorNote("class const is not v1 (use a module-level const)");
                     synchronizeStmt();
@@ -1437,8 +1483,14 @@ public final class Parser {
                     }
                     FnDecl fn = parseFn(p.attrs, true, p.isAbstract);
                     fn.isFinal = p.isFinal;
+                    fn.isStatic = p.isStatic;
                     fn.vis = p.vis;
-                    bindSelf(fn);
+                    if (p.isStatic && p.isAbstract) {
+                        errorNote("static method cannot be abstract");
+                    }
+                    if (!p.isStatic) {
+                        bindSelf(fn);
+                    }
                     checkMethodName(fieldNames, c.methods, fn.name);
                     for (NestedImpl b : c.traitImpls) {
                         checkMethodName(List.of(), b.methods, fn.name);
@@ -1484,6 +1536,7 @@ public final class Parser {
                 f.col = field.col;
                 f.type = parseOptionalType();
                 f.optional = p.attrs.isOptional;
+                f.exported = p.exported;
                 f.vis = p.vis;
                 if (match(Tok.Eq)) {
                     f.hasDefault = true;
@@ -1538,6 +1591,9 @@ public final class Parser {
             do {
                 Token param = expect(Tok.Identifier, "expected parameter name");
                 parseOptionalType();
+                if (match(Tok.Eq)) {
+                    parseExpr();
+                }
                 sig.params.add(param.text);
             } while (match(Tok.Comma));
         }
@@ -1593,6 +1649,14 @@ public final class Parser {
                 prog.items.add(item);
             }
         };
+        if (!inMod && check(Tok.Identifier) && "singleton".equals(peek().text)) {
+            advance();
+            Token name = expect(Tok.Identifier, "expected singleton name");
+            expect(Tok.Semi, "expected ';' after singleton");
+            prog.singletons.add(name.text);
+            note.accept(ItemKind.Singleton, prog.singletons.size() - 1);
+            return;
+        }
         boolean isPub = !inMod;
         boolean isAbstract = false;
         boolean isFinal = false;

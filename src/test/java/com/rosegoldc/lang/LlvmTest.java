@@ -32,6 +32,9 @@ public class LlvmTest {
         assertTrue(ir, ir.contains("!DISubprogram("));
         assertTrue(ir, ir.contains("!DILocation("));
         assertTrue(ir, ir.contains("!dbg !"));
+        assertTrue(ir, ir.contains("filename: \"hello.rg\""));
+        String dir = Path.of("hello.rg").toAbsolutePath().normalize().getParent().toString().replace('\\', '/');
+        assertTrue(ir, ir.contains("directory: \"" + dir + "\""));
         assertFalse(ir, ir.contains("{ not lowered to llvm }"));
     }
 

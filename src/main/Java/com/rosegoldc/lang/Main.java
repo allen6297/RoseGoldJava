@@ -169,6 +169,7 @@ public final class Main {
         System.out.println("      llvm --run [file] [args...]");
         System.out.println("      llvm --test [file]");
         System.out.println("      llvm --test --run [file]");
+        System.out.println("      llvm --godot [file] [-o out]");
         printAliases("version");
         System.out.println("      version");
     }
@@ -232,13 +233,17 @@ public final class Main {
         boolean link = false;
         boolean run = false;
         boolean test = false;
+        boolean godot = false;
         String outArg = "";
         String path = "";
         List<String> extra = new ArrayList<>();
-        String llvmUsage = "Usage: llvm [file] | llvm --link [file] [-o out] | llvm --run [file] [args...] | llvm --test [file] | llvm --test --run [file]";
+        String llvmUsage = "Usage: llvm [file] | llvm --link [file] [-o out] | llvm --run [file] [args...] | llvm --test [file] | llvm --test --run [file] | llvm --godot [file] [-o out]";
         for (int i = 0; i < args.size(); i++) {
             String a = args.get(i);
             if (a.equals("--link")) {
+                link = true;
+            } else if (a.equals("--godot")) {
+                godot = true;
                 link = true;
             } else if (a.equals("--run")) {
                 run = true;
@@ -271,6 +276,10 @@ public final class Main {
             System.err.println(llvmUsage);
             return 2;
         }
+        if (godot && (run || test)) {
+            System.err.println(llvmUsage);
+            return 2;
+        }
         String source = Files.readString(file, StandardCharsets.UTF_8);
         List<Diagnostic> diags = new ArrayList<>();
         Program program;
@@ -286,7 +295,7 @@ public final class Main {
             }
             return hasError(diags) ? 1 : 0;
         }
-        Checker checker = Checker.check(program, file.toString(), diags);
+        Checker checker = Checker.check(program, file.toString(), diags, godot);
         if (hasError(diags)) {
             for (Diagnostic d : diags) {
                 System.err.println(d.toHuman());
@@ -311,27 +320,31 @@ public final class Main {
             return 0;
         }
         Path nativeDir = LlvmLink.resolveNativeDir(cwd);
-        String stem = file.getFileName() == null ? "a" : file.getFileName().toString();
-        int dot = stem.lastIndexOf('.');
-        if (dot > 0) {
-            stem = stem.substring(0, dot);
-        }
         Path out;
         if (!outArg.isEmpty()) {
             out = cwd.resolve(outArg);
         } else if (run) {
-            Path tmp = LlvmLink.runCacheDir();
-            out = tmp.resolve(stem + "-" + System.nanoTime());
+            out = null;
         } else {
+            String stem = file.getFileName() == null ? "a" : file.getFileName().toString();
+            int dot = stem.lastIndexOf('.');
+            if (dot > 0) {
+                stem = stem.substring(0, dot);
+            }
             out = cwd.resolve("build").resolve(stem);
         }
-        LlvmLink.Result result = LlvmLink.link(checker, nativeDir, out, test);
+        LlvmLink.Result result = godot
+                ? LlvmLink.linkGodot(checker, nativeDir, out)
+                : LlvmLink.link(checker, nativeDir, out, test);
         if (!result.ok) {
             System.err.println(result.message.isEmpty() ? "link failed" : result.message.trim());
             return result.exitCode == 0 ? 1 : result.exitCode;
         }
         if (!run) {
             System.out.println(result.output);
+            if (godot) {
+                System.out.println(LlvmLink.manifestBeside(result.output));
+            }
             return 0;
         }
         List<String> argv = new ArrayList<>();

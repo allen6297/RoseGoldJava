@@ -480,7 +480,97 @@ final class TypeChecker {
             }
             applied = Types.appliedParent(env.classParents, env.allTypes, applied);
         }
+        return liveProp(typeName, name);
+    }
+
+    /** position, rotation, and scale on an engine node are stored on the live object. */
+    private String liveProp(String typeName, String name) {
+        if (!engineNode(typeName)) {
+            return "";
+        }
+        if ("position".equals(name) || "scale".equals(name)) {
+            return "Vec2";
+        }
+        if ("rotation".equals(name)) {
+            return "Float";
+        }
         return "";
+    }
+
+    private boolean engineNode(String typeName) {
+        Map<String, FnDecl> methods = env.typeMethods.get(Types.typeHead(typeName));
+        if (methods == null) {
+            return false;
+        }
+        for (FnDecl method : methods.values()) {
+            String file = method.file == null ? "" : method.file.replace('\\', '/');
+            if (file.endsWith("/godot/lib.rg")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Object, or a class whose own methods are engine stubs. User scripts that extend a node are not. */
+    private boolean engineClass(String typeName) {
+        String head = Types.typeHead(typeName);
+        if (!env.classAbstract.containsKey(head) || !extendsObject(head)) {
+            return false;
+        }
+        return head.equals("Object") || engineNode(head);
+    }
+
+    private boolean godotObject(String typeName) {
+        return extendsObject(Types.typeHead(typeName));
+    }
+
+    private boolean extendsObject(String head) {
+        String cur = head;
+        for (int i = 0; i < 32 && cur != null && !cur.isEmpty(); i++) {
+            if (cur.equals("Object")) {
+                return true;
+            }
+            if (!env.classAbstract.containsKey(cur)) {
+                return false;
+            }
+            String parent = env.classParents.get(cur);
+            if (parent == null || parent.isEmpty()) {
+                return false;
+            }
+            cur = Types.typeHead(parent);
+        }
+        return false;
+    }
+
+    private String castTarget(Expr e) {
+        if (e.text == null || e.text.isEmpty() || e.kids.isEmpty()) {
+            return "";
+        }
+        String head = Types.typeHead(e.text);
+        if (env.allTypes.get(head) == null || !engineClass(head)) {
+            return "";
+        }
+        String src = infer(e.kids.getFirst());
+        if (known(src) && !godotObject(src)) {
+            return "";
+        }
+        return e.text;
+    }
+
+    private void checkCast(Expr e) {
+        String head = Types.typeHead(e.text == null ? "" : e.text);
+        if (head.isEmpty() || env.allTypes.get(head) == null) {
+            fail(e.line, e.col, "unknown type '" + head + "'");
+            return;
+        }
+        if (!engineClass(head)) {
+            fail(e.line, e.col, "can only cast to an engine type");
+            return;
+        }
+        String src = e.kids.isEmpty() ? "" : infer(e.kids.getFirst());
+        if (known(src) && !godotObject(src)) {
+            fail(e.line, e.col, "cannot cast " + src + " to " + head);
+        }
     }
 
     private boolean defined(String name) {
@@ -501,6 +591,9 @@ final class TypeChecker {
         }
         if (name.equals("print") || name.equals("len") || name.equals("assert") || name.equals("argv")
                 || name.equals("argv_len")) {
+            return true;
+        }
+        if (env.singletons.contains(name)) {
             return true;
         }
         if (env.allTypes.containsKey(name) || env.structs.containsKey(name) || env.enums.containsKey(name)
@@ -583,6 +676,9 @@ final class TypeChecker {
                 EnumDecl en = env.findEnum(e.text);
                 if (en != null) {
                     return en.name;
+                }
+                if (env.singletons.contains(e.text)) {
+                    return e.text;
                 }
                 return "";
             }
@@ -676,6 +772,8 @@ final class TypeChecker {
                 }
                 return futureElem(ty);
             }
+            case Cast:
+                return castTarget(e);
             default:
                 return "";
         }
@@ -793,6 +891,13 @@ final class TypeChecker {
 
     private String inferMethod(Expr e) {
         Expr recv = e.kids.getFirst();
+        if (recv.kind == Expr.Kind.Var && env.findStruct(recv.text) != null && !known(lookup(recv.text))
+                && !env.singletons.contains(recv.text)) {
+            FnDecl st = env.lookupStatic(recv.text, e.text).fn;
+            if (st != null && !st.returnType.isEmpty()) {
+                return st.returnType;
+            }
+        }
         if (recv.kind == Expr.Kind.Var && recv.text.equals("Future")) {
             if (e.text.equals("all")) {
                 if (e.kids.size() < 2) {
@@ -992,7 +1097,7 @@ final class TypeChecker {
             if (hit.ok()) {
                 return Types.substType(hit.m.returnType, traitEnv(hit.trait));
             }
-            Checker.MethodHit found = env.lookupMethod(obj, e.text);
+            Checker.MethodHit found = env.lookupMethod(isCallable(obj) ? "Fn" : obj, e.text);
             if (found.fn != null) {
                 Map<String, String> tenv = envForApplied(recvApplied(obj, found.definedOn));
                 if (!found.fn.typeParams.isEmpty()) {
@@ -1123,6 +1228,33 @@ final class TypeChecker {
         if (expected != got) {
             fail(line, col, label + " expected " + expected + " args, got " + got);
         }
+    }
+
+    private void checkCallArity(FnDecl fn, String label, int got, boolean method, int line, int col) {
+        int min = fn.minArity(method);
+        int max = fn.maxArity(method);
+        if (engineVararg(fn)) {
+            if (got < min) {
+                fail(line, col, label + " expected at least " + min + " args, got " + got);
+            }
+            return;
+        }
+        if (got >= min && got <= max) {
+            return;
+        }
+        if (min == max) {
+            fail(line, col, label + " expected " + max + " args, got " + got);
+        } else {
+            fail(line, col, label + " expected " + min + " to " + max + " args, got " + got);
+        }
+    }
+
+    private boolean engineVararg(FnDecl fn) {
+        if (fn == null || !fn.isVararg) {
+            return false;
+        }
+        String file = fn.file == null ? "" : fn.file.replace('\\', '/');
+        return file.endsWith("/godot/lib.rg");
     }
 
     private boolean unifyType(String pattern, String got, Map<String, String> tenv) {
@@ -1456,7 +1588,7 @@ final class TypeChecker {
                 if (e.kids.getFirst().kind == Expr.Kind.Lambda && e.kids.getFirst().lambda != null) {
                     FnDecl fn = e.kids.getFirst().lambda;
                     List<Expr> args = rest(e.kids);
-                    checkArity("<fn>", fn.params.size(), args.size(), e.line, e.col);
+                    checkCallArity(fn, "<fn>", args.size(), false, e.line, e.col);
                     checkTypeArgCount(fn.typeParams, e.typeArgs, e.line, e.col, "<fn>");
                     if (!fn.typeParams.isEmpty()) {
                         Map<String, String> tenv = inferEnv(fn.typeParams, e.typeArgs, fn.paramTypes, args);
@@ -1526,7 +1658,8 @@ final class TypeChecker {
         }
         FnDecl fn = env.findLocalFn(name);
         if (fn != null) {
-            checkArity(name, fn.params.size(), n, e.line, e.col);
+            e.callee = fn;
+            checkCallArity(fn, name, n, false, e.line, e.col);
             checkTypeArgCount(fn.typeParams, e.typeArgs, e.line, e.col, name);
             if (!fn.typeParams.isEmpty()) {
                 Map<String, String> tenv = inferEnv(fn.typeParams, e.typeArgs, fn.paramTypes, e.kids);
@@ -1549,9 +1682,9 @@ final class TypeChecker {
             }
             Checker.MethodHit found = env.lookupMethod(currentSelf, name);
             if (found.fn != null) {
+                e.callee = found.fn;
                 checkAccess(found.fn.vis, "method", name, found.definedOn, e.line, e.col);
-                int expect = found.fn.params.isEmpty() ? 0 : found.fn.params.size() - 1;
-                checkArity(currentSelf + "." + name, expect, n, e.line, e.col);
+                checkCallArity(found.fn, currentSelf + "." + name, n, true, e.line, e.col);
                 Map<String, String> tenv = envForApplied(recvApplied(currentSelf, found.definedOn));
                 mergeMethodEnv(found.fn, e, e.kids, tenv);
                 checkArgTypesEnv(found.fn, e.kids, true, e.line, e.col, tenv);
@@ -1766,7 +1899,7 @@ final class TypeChecker {
             return false;
         }
         List<Expr> args = rest(e.kids);
-        checkArity(e.text, fn.params.size(), n + 1, e.line, e.col);
+        checkCallArity(fn, e.text, n, true, e.line, e.col);
         checkTypeArgCount(fn.typeParams, e.typeArgs, e.line, e.col, fn.name);
         if (!fn.typeParams.isEmpty()) {
             List<Expr> vals = new ArrayList<>();
@@ -1886,6 +2019,20 @@ final class TypeChecker {
             }
             return;
         }
+        if (recv.kind == Expr.Kind.Var && env.findStruct(recv.text) != null && !known(lookup(recv.text))
+                && !env.singletons.contains(recv.text)) {
+            Checker.MethodHit found = env.lookupStatic(recv.text, e.text);
+            if (found.fn == null) {
+                fail(e.line, e.col, recv.text + " has no static method '" + e.text + "'");
+                return;
+            }
+            e.callee = found.fn;
+            checkAccess(found.fn.vis, "method", e.text, found.definedOn, e.line, e.col);
+            checkCallArity(found.fn, recv.text + "." + e.text, n, false, e.line, e.col);
+            checkArgTypes(found.fn, args, false, e.line, e.col);
+            requireTry(found.fn.throwsEx, e.text, e.line, e.col);
+            return;
+        }
         if (recv.kind == Expr.Kind.Var && recv.text.equals("super")) {
             if (currentSuper.isEmpty()) {
                 fail(e.line, e.col, "super is only valid in a method of a class that extends another");
@@ -1900,9 +2047,9 @@ final class TypeChecker {
                 fail(e.line, e.col, "cannot call abstract method '" + e.text + "'");
                 return;
             }
+            e.callee = found.fn;
             checkAccess(found.fn.vis, "method", e.text, found.definedOn, e.line, e.col);
-            int expect = found.fn.params.isEmpty() ? 0 : found.fn.params.size() - 1;
-            checkArity(currentSuper + "." + e.text, expect, n, e.line, e.col);
+            checkCallArity(found.fn, currentSuper + "." + e.text, n, true, e.line, e.col);
             Map<String, String> tenv = envForApplied(recvApplied(currentSuper, found.definedOn));
             mergeMethodEnv(found.fn, e, args, tenv);
             checkArgTypesEnv(found.fn, args, true, e.line, e.col, tenv);
@@ -1960,7 +2107,8 @@ final class TypeChecker {
                     fail(e.line, e.col, "module '" + recv.text + "' has no export '" + e.text + "'");
                     return;
                 }
-                checkArity(recv.text + "." + e.text, eit.params.size(), n, e.line, e.col);
+                e.callee = eit;
+                checkCallArity(eit, recv.text + "." + e.text, n, false, e.line, e.col);
                 checkArgTypes(eit, args, false, e.line, e.col);
                 requireTry(eit.throwsEx, e.text, e.line, e.col);
                 return;
@@ -1993,7 +2141,8 @@ final class TypeChecker {
                     fail(e.line, e.col, "module '" + modPath + "' has no export '" + e.text + "'");
                     return;
                 }
-                checkArity(modPath + "." + e.text, eit.params.size(), n, e.line, e.col);
+                e.callee = eit;
+                checkCallArity(eit, modPath + "." + e.text, n, false, e.line, e.col);
                 checkArgTypes(eit, args, false, e.line, e.col);
                 requireTry(eit.throwsEx, e.text, e.line, e.col);
                 return;
@@ -2015,11 +2164,11 @@ final class TypeChecker {
                 checkBoundArgs(hit, obj, args, e.line, e.col);
                 return;
             }
-            Checker.MethodHit found = env.lookupMethod(obj, e.text);
+            Checker.MethodHit found = env.lookupMethod(isCallable(obj) ? "Fn" : obj, e.text);
             if (found.fn != null) {
+                e.callee = found.fn;
                 checkAccess(found.fn.vis, "method", e.text, found.definedOn, e.line, e.col);
-                int expect = found.fn.params.isEmpty() ? 0 : found.fn.params.size() - 1;
-                checkArity(obj + "." + e.text, expect, n, e.line, e.col);
+                checkCallArity(found.fn, obj + "." + e.text, n, true, e.line, e.col);
                 Map<String, String> tenv = envForApplied(recvApplied(obj, found.definedOn));
                 mergeMethodEnv(found.fn, e, args, tenv);
                 checkArgTypesEnv(found.fn, args, true, e.line, e.col, tenv);
@@ -2027,6 +2176,10 @@ final class TypeChecker {
                 return;
             }
             if (checkUfcs(e, n)) {
+                return;
+            }
+            if (isCallable(obj)) {
+                fail(e.line, e.col, "function has no method '" + e.text + "'");
                 return;
             }
             fail(e.line, e.col, (isTraitType(obj) ? "trait " : "struct ") + obj + " has no method '" + e.text + "'");
@@ -2069,6 +2222,13 @@ final class TypeChecker {
             inTry = prev;
             return;
         }
+        if (e.kind == Expr.Kind.Cast) {
+            if (!e.kids.isEmpty()) {
+                walkExpr(e.kids.getFirst());
+            }
+            checkCast(e);
+            return;
+        }
         if (e.kind == Expr.Kind.Await) {
             if (!currentAsync) {
                 fail(e.line, e.col, "'await' is only allowed in async functions");
@@ -2107,9 +2267,10 @@ final class TypeChecker {
             checkCall(e);
             return;
         }
-        if (e.kind == Expr.Kind.MethodCall) {
+            if (e.kind == Expr.Kind.MethodCall) {
             for (int i = 0; i < e.kids.size(); i++) {
-                if (i == 0 && e.kids.getFirst().kind == Expr.Kind.Var && e.kids.getFirst().text.equals("Future")) {
+                if (i == 0 && e.kids.getFirst().kind == Expr.Kind.Var
+                        && (e.kids.getFirst().text.equals("Future") || env.findStruct(e.kids.getFirst().text) != null)) {
                     continue;
                 }
                 walkExpr(e.kids.get(i));
@@ -2160,7 +2321,7 @@ final class TypeChecker {
                 fail(e.line, e.col, "trait " + obj + " has no field '" + e.text + "'");
                 return;
             }
-            if (known(obj) && !hasField(obj, e.text)) {
+            if (known(obj) && !hasField(obj, e.text) && liveProp(obj, e.text).isEmpty()) {
                 fail(e.line, e.col, "struct " + obj + " has no field '" + e.text + "'");
             } else if (known(obj)) {
                 Checker.FieldHit found = env.lookupField(obj, e.text);
@@ -2367,7 +2528,7 @@ final class TypeChecker {
                 String obj = infer(stmt.target);
                 if (known(obj) && isTraitType(obj)) {
                     fail(stmt.line, stmt.col, "trait " + obj + " has no field '" + stmt.name + "'");
-                } else if (known(obj) && !hasField(obj, stmt.name)) {
+                } else if (known(obj) && !hasField(obj, stmt.name) && liveProp(obj, stmt.name).isEmpty()) {
                     fail(stmt.line, stmt.col, "struct " + obj + " has no field '" + stmt.name + "'");
                 } else if (known(obj)) {
                     Checker.FieldHit found = env.lookupField(obj, stmt.name);
@@ -2509,6 +2670,9 @@ final class TypeChecker {
     }
 
     private void checkFn(FnDecl fn, String selfType) {
+        if (fn.isVararg && !engineVararg(fn)) {
+            fail(fn.line, 1, "vararg applies to an engine method");
+        }
         if (fn.isAbstract) {
             return;
         }
@@ -2570,6 +2734,18 @@ final class TypeChecker {
                 }
             }
             bind(fn.params.get(i), ty);
+        }
+        for (int i = 0; i < fn.params.size(); i++) {
+            Expr d = fn.paramDefault(i);
+            if (d == null) {
+                continue;
+            }
+            walkExpr(d);
+            String expect = i < fn.paramTypes.size() ? fn.paramTypes.get(i) : "";
+            String got = infer(d);
+            if (known(expect) && known(got) && !assignable(expect, got, d)) {
+                fail(d.line, d.col, "cannot use " + got + " as the default for '" + fn.params.get(i) + "', expected " + expect);
+            }
         }
         for (Stmt stmt : fn.body) {
             walkStmt(stmt);
@@ -2633,6 +2809,14 @@ final class TypeChecker {
                 String prevMod = env.currentModule;
                 env.currentModule = m.getValue().module;
                 checkFn(m.getValue(), type.getKey());
+                env.currentModule = prevMod;
+            }
+        }
+        for (Map.Entry<String, Map<String, FnDecl>> type : env.staticMethods.entrySet()) {
+            for (Map.Entry<String, FnDecl> m : type.getValue().entrySet()) {
+                String prevMod = env.currentModule;
+                env.currentModule = m.getValue().module;
+                checkFn(m.getValue(), "");
                 env.currentModule = prevMod;
             }
         }

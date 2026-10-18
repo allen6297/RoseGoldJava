@@ -55,6 +55,12 @@ final class Vm {
                     regs[in.a] = interp.globalSignal(in.s, in.line, in.col);
                     pc++;
                 }
+                case LOAD_SINGLETON -> {
+                    throw new RuntimeException("'" + in.s + "' is available when the script runs in Godot");
+                }
+                case STATIC -> {
+                    throw new RuntimeException("'" + in.module + "." + in.s + "' is available when the script runs in Godot");
+                }
                 case MOVE -> {
                     regs[in.a] = regs[in.b];
                     pc++;

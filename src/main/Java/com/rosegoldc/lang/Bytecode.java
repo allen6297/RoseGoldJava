@@ -10,6 +10,7 @@ final class Bytecode {
         LOAD_FN,
         LOAD_ENUM,
         LOAD_SIGNAL,
+        LOAD_SINGLETON,
         MOVE,
         BIN,
         UNARY,
@@ -27,6 +28,7 @@ final class Bytecode {
         LEN,
         MAP,
         METHOD,
+        STATIC,
         SUPER,
         STRUCT,
         MEMBER,
@@ -112,6 +114,8 @@ final class Bytecode {
                 case LOAD_FN -> "LOAD_FN r" + in.a + " " + in.s;
                 case LOAD_ENUM -> "LOAD_ENUM r" + in.a + " " + in.s;
                 case LOAD_SIGNAL -> "LOAD_SIGNAL r" + in.a + " " + in.s;
+                case LOAD_SINGLETON -> "LOAD_SINGLETON r" + in.a + " " + in.s;
+                case STATIC -> "STATIC r" + in.a + " " + in.module + "." + in.s + " base=r" + in.b + " argc=" + in.c;
                 case MOVE -> "MOVE r" + in.a + " r" + in.b;
                 case BIN -> "BIN " + in.s + " r" + in.a + " r" + in.b + " r" + in.c;
                 case UNARY -> "UNARY " + in.s + " r" + in.a + " r" + in.b;

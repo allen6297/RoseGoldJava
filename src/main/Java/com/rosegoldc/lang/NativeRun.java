@@ -81,20 +81,11 @@ public final class NativeRun {
             return new Result(false, 1, d.toHuman(), null, null);
         }
         Path nativeDir = LlvmLink.resolveNativeDir(cwd);
-        String stem = file.getFileName() == null ? "a" : file.getFileName().toString();
-        int dot = stem.lastIndexOf('.');
-        if (dot > 0) {
-            stem = stem.substring(0, dot);
-        }
-        Path tmp = LlvmLink.runCacheDir();
-        String prefix = test ? "test-" : "";
-        LlvmLink.Result linked = LlvmLink.link(checker, nativeDir, tmp.resolve(prefix + stem + "-" + System.nanoTime()),
-                test);
+        LlvmLink.Result linked = LlvmLink.link(checker, nativeDir, null, test);
         if (!linked.ok || linked.output == null) {
             return new Result(linked.ok, linked.exitCode, linked.message, linked.output, linked.command);
         }
-        Path exe = LlvmLink.stageExe(linked.output);
-        return new Result(true, linked.exitCode, linked.message, exe, linked.command);
+        return new Result(true, linked.exitCode, linked.message, linked.output, linked.command);
     }
 
     public static Result execFile(Path file, List<String> argv, Path workDir, boolean test)

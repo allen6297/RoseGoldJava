@@ -17,7 +17,14 @@ enum {
     RG_ENUM = 10,
     RG_FN = 11,
     RG_FUTURE = 12,
-    RG_SIGNAL = 13
+    RG_SIGNAL = 13,
+    RG_OBJECT = 14
+};
+
+enum {
+    RG_GODOT_EMIT = 1,
+    RG_GODOT_CONNECT = 2,
+    RG_GODOT_DISCONNECT = 3
 };
 
 enum {
@@ -55,6 +62,23 @@ typedef struct RGValue {
     const char *p;
 } RGValue;
 
+typedef void *(*RGSlotGet)(int64_t id);
+typedef void (*RGSlotPut)(int64_t id, void *ptr);
+typedef void (*RGSlotDel)(int64_t id);
+typedef void (*RGGodotSignalFn)(int64_t object_id, const char *name, int32_t op,
+        const RGValue *args, int32_t argc);
+typedef void (*RGGodotCallFn)(int64_t object_id, const char *name, const RGValue *args, int32_t argc,
+        RGValue *dest);
+typedef void (*RGGodotFnFn)(const RGValue *fn, const char *name, const RGValue *args, int32_t argc,
+        RGValue *dest);
+typedef int32_t (*RGGodotValueFn)(const char *type, const RGValue *self, const char *name,
+        const RGValue *args, int32_t argc, RGValue *dest);
+/* write == 0 fills value from the live property. write == 1 pushes value to the node. */
+typedef void (*RGGodotPropFn)(int64_t object_id, const char *name, RGValue *value, int32_t write);
+typedef void (*RGGodotSingletonFn)(RGValue *dest, const char *name);
+typedef void (*RGGodotStaticFn)(const char *class_name, const char *method, const RGValue *args, int32_t argc,
+        RGValue *dest);
+
 void rg_set_void(RGValue *v);
 void rg_set_bool(RGValue *v, int32_t b);
 void rg_set_int(RGValue *v, int64_t n);
@@ -72,6 +96,7 @@ void rg_index_get(RGValue *dest, const RGValue *obj, const RGValue *idx);
 void rg_index_set(RGValue *obj, const RGValue *idx, const RGValue *value);
 void rg_iter_items(RGValue *dest, const RGValue *iter);
 void rg_len(RGValue *dest, const RGValue *src);
+void rg_map_key_at(RGValue *dest, const RGValue *map, int32_t index);
 void rg_assert(RGValue *dest, RGValue *args, int32_t argc);
 void rg_test_ok(const char *name);
 void rg_test_fail(const char *name, const RGValue *err);
@@ -90,8 +115,12 @@ void rg_match_lit(RGValue *dest, const RGValue *value, const RGValue *pat);
 void rg_match_var(RGValue *dest, const RGValue *value, const char *name);
 void rg_payload(RGValue *dest, const RGValue *value, int32_t index, const char *field);
 void rg_fn_ref(RGValue *dest, void (*fn)(RGValue *, RGValue *, int32_t), int32_t arity);
+void rg_fn_host(RGValue *dest, void (*fn)(RGValue *, RGValue *, int32_t), int64_t id);
+int64_t rg_fn_host_id(const RGValue *v);
 void rg_closure(RGValue *dest, void (*fn)(RGValue *, RGValue *, int32_t), int32_t arity, RGValue *caps, int32_t ncaps);
 void rg_call_val(RGValue *dest, RGValue *base, int32_t argc);
+int32_t rg_fn_same(const RGValue *a, const RGValue *b);
+uint32_t rg_fn_hash(const RGValue *v);
 void rg_throw(RGValue *v);
 int32_t rg_has_throw(void);
 void rg_catch(RGValue *dest);
@@ -102,5 +131,25 @@ void rg_register_type_signal(const char *type, const char *name, int32_t arity);
 void rg_flush_deferred(void);
 void rg_set_argv(int32_t argc, char **argv);
 void rg_host_call(RGValue *dest, const char *module, const char *name, RGValue *args, int32_t argc);
+void rg_set_object(RGValue *v, int64_t object_id);
+int64_t rg_object_id(const RGValue *v);
+void *rg_object_ptr(const RGValue *v);
+void rg_object_bind_slots(RGSlotGet get, RGSlotPut put, RGSlotDel del);
+void rg_object_slot_put(int64_t id, void *ptr);
+void rg_object_slot_del(int64_t id);
+void rg_godot_bind(RGValue *inst, int64_t object_id);
+void rg_set_godot_signal(RGGodotSignalFn fn);
+void rg_set_godot_call(RGGodotCallFn fn);
+void rg_set_godot_fn(RGGodotFnFn fn);
+void rg_set_godot_value(RGGodotValueFn fn);
+void rg_godot_call(RGValue *dest, const char *name, RGValue *args, int32_t argc);
+void rg_set_godot_prop(RGGodotPropFn fn);
+void rg_set_godot_singleton(RGGodotSingletonFn fn);
+void rg_godot_singleton(RGValue *dest, const char *name);
+void rg_set_godot_static(RGGodotStaticFn fn);
+void rg_godot_static(RGValue *dest, const char *class_name, const char *method, RGValue *args, int32_t argc);
+void rg_godot_props_begin(void);
+const char *rg_struct_name(const RGValue *v);
+int32_t rg_struct_has(const RGValue *v, const char *name);
 
 #endif

@@ -34,6 +34,7 @@ intellijPlatform {
 tasks.processResources {
     from(rootDir) {
         include("builtin/std/**")
+        include("builtin/godot/**")
         include("native/**")
     }
 }

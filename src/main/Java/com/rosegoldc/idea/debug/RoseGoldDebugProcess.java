@@ -1,6 +1,5 @@
 package com.rosegoldc.idea.debug;
 
-import com.rosegoldc.idea.RoseGold;
 import com.rosegoldc.idea.run.RoseGoldRunConfiguration;
 import com.intellij.execution.ExecutionException;
 import com.intellij.execution.process.ProcessHandler;
@@ -32,6 +31,8 @@ import com.intellij.xdebugger.frame.XValueModifier;
 import com.intellij.xdebugger.frame.XValueNode;
 import com.intellij.xdebugger.frame.XValuePlace;
 import com.rosegoldc.lang.Debug;
+import com.rosegoldc.lang.DebugEngine;
+import com.rosegoldc.lang.NativeDebug;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -48,7 +49,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 final class RoseGoldDebugProcess extends XDebugProcess {
 
     private final Handler processHandler;
-    private final Debug debug;
+    private final DebugEngine debug;
     private final Map<String, List<XLineBreakpoint<XBreakpointProperties<?>>>> lineBreaks = new ConcurrentHashMap<>();
     private final AtomicBoolean stopping = new AtomicBoolean();
     private volatile ConsoleView console;
@@ -57,43 +58,52 @@ final class RoseGoldDebugProcess extends XDebugProcess {
             @NotNull XDebugSession session,
             @NotNull RoseGoldRunConfiguration configuration
     ) throws ExecutionException {
-        Path file = configuration.resolvedFile();
-        return new RoseGoldDebugProcess(session, configuration, file);
+        return new RoseGoldDebugProcess(session, configuration, configuration.resolvedFile(), false);
+    }
+
+    static @NotNull RoseGoldDebugProcess createNative(
+            @NotNull XDebugSession session,
+            @NotNull RoseGoldRunConfiguration configuration
+    ) throws ExecutionException {
+        String missing = NativeDebug.missingReason();
+        if (!missing.isEmpty()) {
+            throw new ExecutionException(missing);
+        }
+        return new RoseGoldDebugProcess(session, configuration, configuration.resolvedFile(), true);
     }
 
     private RoseGoldDebugProcess(
             @NotNull XDebugSession session,
             @NotNull RoseGoldRunConfiguration configuration,
-            @NotNull Path file
+            @NotNull Path file,
+            boolean nativeDebug
     ) {
         super(session);
         this.processHandler = new Handler("RoseGold debug " + file);
-        this.debug = new Debug(
-                file,
-                configuration.programArgv(file),
-                configuration.workDirectory(file),
-                new Debug.Listener() {
-                    @Override
-                    public void onPaused(String reason) {
-                        List<Debug.Frame> frames = debug.stack();
-                        XSuspendContext context = new SuspendContext(toXFrames(frames));
-                        ApplicationManager.getApplication().invokeLater(() -> getSession().positionReached(context));
-                    }
+        Debug.Listener listener = new Debug.Listener() {
+            @Override
+            public void onPaused(String reason) {
+                List<Debug.Frame> frames = debug.stack();
+                XSuspendContext context = new SuspendContext(toXFrames(frames));
+                ApplicationManager.getApplication().invokeLater(() -> getSession().positionReached(context));
+            }
 
-                    @Override
-                    public void onOutput(String text, boolean error) {
-                        print(text, error);
-                    }
+            @Override
+            public void onOutput(String text, boolean error) {
+                print(text, error);
+            }
 
-                    @Override
-                    public void onExited(int code, String message) {
-                        if (message != null && !message.isEmpty()) {
-                            print(message.endsWith("\n") ? message : message + "\n", code != 0);
-                        }
-                        processHandler.terminated(code);
-                    }
+            @Override
+            public void onExited(int code, String message) {
+                if (message != null && !message.isEmpty()) {
+                    print(message.endsWith("\n") ? message : message + "\n", code != 0);
                 }
-        );
+                processHandler.terminated(code);
+            }
+        };
+        this.debug = nativeDebug
+                ? new NativeDebug(file, configuration.programArgv(file), configuration.workDirectory(file), listener)
+                : new Debug(file, configuration.programArgv(file), configuration.workDirectory(file), listener);
         debug.setStopOnEntry(configuration.isStopOnEntry());
     }
 

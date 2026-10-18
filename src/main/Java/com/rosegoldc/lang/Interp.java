@@ -126,7 +126,18 @@ final class Interp {
         if (callDepth >= MAX_CALL_DEPTH) {
             throw runtime("call stack overflow", line, col);
         }
-        if (args.size() != fn.params.size()) {
+        if (args.size() < fn.params.size()) {
+            List<Value> padded = new ArrayList<>(args);
+            for (int i = args.size(); i < fn.params.size(); i++) {
+                Expr d = fn.paramDefault(i);
+                if (d == null) {
+                    break;
+                }
+                padded.add(eval(d));
+            }
+            args = padded;
+        }
+        if (args.size() != fn.params.size() && !(fn.isVararg && args.size() > fn.params.size())) {
             throw runtime(fn.name + " takes " + fn.params.size() + " argument(s)", line, col);
         }
         if (fn.isDeprecated) {
@@ -543,6 +554,8 @@ final class Interp {
                 yield indexGet(eval(e.kids.get(0)), eval(e.kids.get(1)), e.line, e.col);
             }
             case Try -> eval(e.kids.getFirst());
+            case Cast -> e.kids.isEmpty() ? Value.makeVoid() : eval(e.kids.getFirst());
+            case Null -> Value.makeVoid();
             case Member -> evalMember(e);
             case MethodCall -> evalMethodCall(e);
             case StructLit -> evalStructLit(e);
@@ -603,6 +616,16 @@ final class Interp {
         Expr recv = e.kids.getFirst();
         if (recv.kind == Expr.Kind.Var && "super".equals(recv.text)) {
             return callSuper(e.text, args, e.line, e.col);
+        }
+        if (recv.kind == Expr.Kind.Var && findLocalBinding(recv.text) == null && findGlobalBinding(recv.text) == null) {
+            Checker.MethodHit st = checker.lookupStatic(recv.text, e.text);
+            if (st.fn != null && checker.findStruct(recv.text) != null) {
+                String file = st.fn.file == null ? "" : st.fn.file.replace('\\', '/');
+                if (file.endsWith("/godot/lib.rg")) {
+                    throw runtime("'" + recv.text + "." + e.text + "' is available when the script runs in Godot", e.line, e.col);
+                }
+                return callUser(st.fn, args, e.line, e.col);
+            }
         }
         if (recv.kind == Expr.Kind.Var) {
             Value.Binding self = findLocalBinding("self");
@@ -2199,6 +2222,9 @@ final class Interp {
         if (en != null) {
             return Value.makeEnumType(en.name);
         }
+        if (checker.singletons.contains(name)) {
+            throw runtime("'" + name + "' is available when the script runs in Godot", line, col);
+        }
         throw runtime("undefined variable '" + name + "'", line, col);
     }
 
@@ -2494,8 +2520,11 @@ final class Interp {
         if (fn.isAbstract) {
             throw runtime("cannot call abstract method '" + name + "'", line, col);
         }
-        if (args.size() != fn.params.size() - 1) {
-            throw runtime(startType + "." + name + " takes " + (fn.params.size() - 1) + " argument(s)", line, col);
+        int min = fn.minArity(true);
+        int max = fn.maxArity(true);
+        if (args.size() < min || (args.size() > max && !fn.isVararg)) {
+            String span = fn.isVararg ? "at least " + min : (min == max ? Integer.toString(max) : min + " to " + max);
+            throw runtime(startType + "." + name + " takes " + span + " argument(s)", line, col);
         }
         String prev = superType;
         String parent = checker.classParents.get(found.definedOn);

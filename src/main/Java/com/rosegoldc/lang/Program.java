@@ -26,7 +26,8 @@ enum ItemKind {
     Enum,
     Impl,
     Signal,
-    Mod
+    Mod,
+    Singleton
 }
 
 final class TypeParam {
@@ -37,7 +38,7 @@ final class TypeParam {
 final class Expr {
     enum Kind {
         Int, Float, String, Bool, Var, Unary, Binary, Call, MethodCall, Member,
-        Index, Array, Map, StructLit, Range, Try, Lambda, Await
+        Index, Array, Map, StructLit, Range, Try, Lambda, Await, Cast, Null
     }
 
     Kind kind;
@@ -50,6 +51,7 @@ final class Expr {
     final List<String> typeArgs = new ArrayList<>();
     final List<Expr> kids = new ArrayList<>();
     FnDecl lambda;
+    FnDecl callee;
     int line = 1;
     int col = 1;
 }
@@ -97,6 +99,7 @@ final class FnDecl {
     final List<TypeParam> typeParams = new ArrayList<>();
     final List<String> params = new ArrayList<>();
     final List<String> paramTypes = new ArrayList<>();
+    final List<Expr> paramDefaults = new ArrayList<>();
     String returnType = "";
     final List<Stmt> body = new ArrayList<>();
     String module = "";
@@ -109,10 +112,34 @@ final class FnDecl {
     boolean isPub = true;
     boolean isAbstract;
     boolean isFinal;
+    boolean isStatic;
+    boolean isVararg;
     Vis vis = Vis.Pub;
     int line = 1;
     String file = "";
     Bytecode.Fn code;
+
+    Expr paramDefault(int index) {
+        if (index < 0 || index >= paramDefaults.size()) {
+            return null;
+        }
+        return paramDefaults.get(index);
+    }
+
+    int minArity(boolean method) {
+        int off = method ? 1 : 0;
+        for (int i = off; i < params.size(); i++) {
+            if (paramDefault(i) != null) {
+                return i - off;
+            }
+        }
+        return Math.max(0, params.size() - off);
+    }
+
+    int maxArity(boolean method) {
+        int off = method ? 1 : 0;
+        return Math.max(0, params.size() - off);
+    }
 }
 
 final class SignalDecl {
@@ -170,6 +197,7 @@ final class ClassField {
     String type = "";
     boolean hasDefault;
     boolean optional;
+    boolean exported;
     Vis vis = Vis.Pub;
     Expr defaultValue;
     int line = 1;
@@ -255,12 +283,14 @@ final class ModDecl {
     final List<SignalDecl> signals = new ArrayList<>();
     final List<ModDecl> mods = new ArrayList<>();
     final List<OrderedItem> items = new ArrayList<>();
+    final List<String> singletons = new ArrayList<>();
     final List<String> trailingComments = new ArrayList<>();
     boolean isPub = true;
     int line = 1;
 }
 
 public final class Program {
+    public final List<String> singletons = new ArrayList<>();
     public final List<ImportDecl> imports = new ArrayList<>();
     public final List<FnDecl> fns = new ArrayList<>();
     public final List<StructDecl> structs = new ArrayList<>();

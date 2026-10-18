@@ -62,6 +62,22 @@ final class Stdlib {
         return name;
     }
 
+    static Path godotStubDir(String fromFile) {
+        Path std = findStdlibRoot(fromFile);
+        if (std == null) {
+            return null;
+        }
+        Path parent = std.getParent();
+        if (parent == null) {
+            return null;
+        }
+        Path dir = parent.resolve("godot");
+        if (Files.isDirectory(dir) && Files.isRegularFile(dir.resolve("lib.rg"))) {
+            return dir;
+        }
+        return null;
+    }
+
     static Path findStdlibRoot(String fromFile) {
         List<Path> starts = new ArrayList<>();
         if (fromFile != null && !fromFile.isEmpty()) {

@@ -358,6 +358,14 @@ public final class Format {
                         expr(e.kids.getFirst(), 7);
                     }
                 }
+                case Cast -> {
+                    if (!e.kids.isEmpty()) {
+                        expr(e.kids.getFirst(), 7);
+                    }
+                    write(" as ");
+                    write(e.text);
+                }
+                case Null -> write("null");
                 case Lambda -> {
                     if (e.lambda != null) {
                         fnInline(e.lambda);
@@ -635,6 +643,17 @@ public final class Format {
                     write(": ");
                     write(fn.paramTypes.get(i));
                 }
+                Expr def = fn.paramDefault(i);
+                if (def != null) {
+                    write(" = ");
+                    expr(def, 0);
+                }
+            }
+            if (fn.isVararg) {
+                if (!fn.params.isEmpty()) {
+                    write(", ");
+                }
+                write("...");
             }
             write(")");
             if (fn.throwsEx) {
@@ -678,6 +697,9 @@ public final class Format {
             if (fn.isFinal) {
                 write("final ");
             }
+            if (fn.isStatic) {
+                write("static ");
+            }
             visPrefix(fn.vis, fn.isPub);
             if (fn.isAsync) {
                 write("async ");
@@ -695,6 +717,17 @@ public final class Format {
                     write(": ");
                     write(fn.paramTypes.get(i));
                 }
+                Expr def = fn.paramDefault(i);
+                if (def != null) {
+                    write(" = ");
+                    expr(def, 0);
+                }
+            }
+            if (fn.isVararg) {
+                if (!fn.params.isEmpty()) {
+                    write(", ");
+                }
+                write("...");
             }
             write(")");
             if (fn.throwsEx) {
@@ -849,6 +882,9 @@ public final class Format {
                 }
                 if (f.optional) {
                     write("@optional ");
+                }
+                if (f.exported) {
+                    write("export ");
                 }
                 write("var ");
                 write(f.name);
@@ -1013,6 +1049,7 @@ public final class Format {
                 List<ImplDecl> impls,
                 List<SignalDecl> signals,
                 List<ModDecl> mods,
+                List<String> singletons,
                 List<String> trailingComments
         ) {
             ItemKind prev = ItemKind.Import;
@@ -1072,6 +1109,14 @@ public final class Format {
                             modDeclPrint(mods.get(it.index));
                         }
                     }
+                    case Singleton -> {
+                        if (it.index < singletons.size()) {
+                            pad();
+                            write("singleton ");
+                            write(singletons.get(it.index));
+                            write(";\n");
+                        }
+                    }
                 }
             }
             if (opts.keepComments && trailingComments != null && !trailingComments.isEmpty()) {
@@ -1084,7 +1129,7 @@ public final class Format {
 
         void program(Program p) {
             emitItems(p.items, p.imports, p.fns, p.structs, p.classes, p.traits, p.enums,
-                    p.impls, p.signals, p.mods, p.trailingComments);
+                    p.impls, p.signals, p.mods, p.singletons, p.trailingComments);
         }
 
         void modDeclPrint(ModDecl m) {
@@ -1097,7 +1142,7 @@ public final class Format {
             write(" {\n");
             indent++;
             emitItems(m.items, m.imports, m.fns, m.structs, m.classes, m.traits, m.enums,
-                    m.impls, m.signals, m.mods, m.trailingComments);
+                    m.impls, m.signals, m.mods, List.of(), m.trailingComments);
             indent--;
             writeln("}");
         }

@@ -3,3 +3,6 @@
 .intellijPlatform
 build
 ._rg_io_scratch.txt
+godot/demo/.godot/
+godot/demo/bin/
+godot/build/

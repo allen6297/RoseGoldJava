@@ -44,6 +44,11 @@ final class Compile {
                 compileOne(checker, fn, seen);
             }
         }
+        for (Map<String, FnDecl> methods : checker.staticMethods.values()) {
+            for (FnDecl fn : methods.values()) {
+                compileOne(checker, fn, seen);
+            }
+        }
         for (Checker.LoadedMod mod : checker.loaded.values()) {
             for (FnDecl fn : mod.fns.values()) {
                 compileOne(checker, fn, seen);
@@ -529,6 +534,11 @@ final class Compile {
                     emit(Bytecode.Op.LOAD_SIGNAL, dest, 0, 0, e.text, e.line, e.col);
                     yield dest;
                 }
+                if (checker.singletons.contains(e.text)) {
+                    int dest = allocTemp();
+                    emit(Bytecode.Op.LOAD_SINGLETON, dest, 0, 0, e.text, e.line, e.col);
+                    yield dest;
+                }
                 throw skip();
             }
             case Unary -> {
@@ -548,7 +558,9 @@ final class Compile {
             case Range -> compileRange(e);
             case Index -> compileIndex(e);
             case Try -> compileExpr(e.kids.getFirst());
+            case Cast -> compileExpr(e.kids.getFirst());
             case Await -> compileAwait(e);
+            case Null -> loadConst(Value.makeVoid(), e.line, e.col);
             default -> throw skip();
         };
     }
@@ -607,19 +619,22 @@ final class Compile {
         Integer self = slots.get("self");
         String ty = selfType();
         if (callee == null && self != null && ty != null && checker.lookupMethod(ty, e.text).fn != null) {
-            int[] packed = new int[e.kids.size() + 1];
+            callee = checker.lookupMethod(ty, e.text).fn;
+            List<Expr> full = callArgs(callee, e.kids, true);
+            int[] packed = new int[full.size() + 1];
             packed[0] = self;
-            for (int i = 0; i < e.kids.size(); i++) {
-                packed[i + 1] = compileExpr(e.kids.get(i));
+            for (int i = 0; i < full.size(); i++) {
+                packed[i + 1] = compileExpr(full.get(i));
             }
             int base = pack(packed, e.line, e.col);
             int dest = allocTemp();
             emit(Bytecode.Op.METHOD, dest, base, packed.length, e.text, e.line, e.col);
             return dest;
         }
-        int[] args = new int[e.kids.size()];
-        for (int i = 0; i < e.kids.size(); i++) {
-            args[i] = compileExpr(e.kids.get(i));
+        List<Expr> full = callArgs(callee, e.kids, false);
+        int[] args = new int[full.size()];
+        for (int i = 0; i < full.size(); i++) {
+            args[i] = compileExpr(full.get(i));
         }
         int base = pack(args, e.line, e.col);
         int dest = allocTemp();
@@ -724,6 +739,10 @@ final class Compile {
                 return compileSuperCall(e);
             }
             if (slots.get(recv.text) == null) {
+                Checker.MethodHit st = checker.lookupStatic(recv.text, e.text);
+                if (st.fn != null && checker.findStruct(recv.text) != null) {
+                    return compileStaticCall(e, st);
+                }
                 String bound = checker.findModuleBind(recv.text);
                 if (bound != null) {
                     return compileQualifiedCall(bound, e.text, e.kids, 1, e.line, e.col);
@@ -755,9 +774,19 @@ final class Compile {
             out.insts.get(idx).module = ufcs.module == null ? "" : ufcs.module;
             return dest;
         }
-        int[] packed = new int[e.kids.size()];
-        for (int i = 0; i < e.kids.size(); i++) {
-            packed[i] = compileExpr(e.kids.get(i));
+        List<Expr> provided = new ArrayList<>();
+        for (int i = 1; i < e.kids.size(); i++) {
+            provided.add(e.kids.get(i));
+        }
+        FnDecl fn = e.callee;
+        if (fn == null && recvTy != null) {
+            fn = checker.lookupMethod(recvTy, e.text).fn;
+        }
+        List<Expr> full = callArgs(fn, provided, true);
+        int[] packed = new int[full.size() + 1];
+        packed[0] = compileExpr(recv);
+        for (int i = 0; i < full.size(); i++) {
+            packed[i + 1] = compileExpr(full.get(i));
         }
         int base = pack(packed, e.line, e.col);
         int dest = allocTemp();
@@ -765,15 +794,62 @@ final class Compile {
         return dest;
     }
 
+    private int compileStaticCall(Expr e, Checker.MethodHit st) {
+        List<Expr> provided = new ArrayList<>();
+        for (int i = 1; i < e.kids.size(); i++) {
+            provided.add(e.kids.get(i));
+        }
+        List<Expr> full = callArgs(st.fn, provided, false);
+        int[] packed = new int[full.size()];
+        for (int i = 0; i < full.size(); i++) {
+            packed[i] = compileExpr(full.get(i));
+        }
+        int base = pack(packed, e.line, e.col);
+        int dest = allocTemp();
+        String file = st.fn.file == null ? "" : st.fn.file.replace('\\', '/');
+        if (file.endsWith("/godot/lib.rg")) {
+            int idx = emit(Bytecode.Op.STATIC, dest, base, packed.length, e.text, e.line, e.col);
+            out.insts.get(idx).module = st.definedOn;
+            return dest;
+        }
+        int idx = emit(Bytecode.Op.CALL, dest, base, packed.length, st.fn.name, e.line, e.col);
+        Bytecode.Inst inst = out.insts.get(idx);
+        inst.s = st.fn.name;
+        inst.module = st.definedOn;
+        return dest;
+    }
+
+    private List<Expr> callArgs(FnDecl fn, List<Expr> provided, boolean method) {
+        List<Expr> all = new ArrayList<>(provided);
+        if (fn == null) {
+            return all;
+        }
+        int off = method ? 1 : 0;
+        int max = fn.maxArity(method);
+        while (all.size() < max) {
+            Expr d = fn.paramDefault(off + all.size());
+            if (d == null) {
+                break;
+            }
+            all.add(d);
+        }
+        return all;
+    }
+
     private int compileSuperCall(Expr e) {
         Integer self = slots.get("self");
         if (self == null) {
             throw skip();
         }
-        int[] packed = new int[e.kids.size()];
-        packed[0] = self;
+        List<Expr> provided = new ArrayList<>();
         for (int i = 1; i < e.kids.size(); i++) {
-            packed[i] = compileExpr(e.kids.get(i));
+            provided.add(e.kids.get(i));
+        }
+        List<Expr> full = callArgs(e.callee, provided, true);
+        int[] packed = new int[full.size() + 1];
+        packed[0] = self;
+        for (int i = 0; i < full.size(); i++) {
+            packed[i + 1] = compileExpr(full.get(i));
         }
         int base = pack(packed, e.line, e.col);
         int dest = allocTemp();

@@ -5,7 +5,11 @@ import org.junit.Test;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertEquals;
@@ -13,6 +17,87 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public class DebugTest {
+
+    @Test
+    public void jsonRoundTrip() {
+        Map<String, Object> msg = new LinkedHashMap<>();
+        msg.put("seq", 3);
+        msg.put("ok", true);
+        msg.put("name", "hi\n");
+        msg.put("args", List.of("a", 2L));
+        Object decoded = DapJson.decode(DapJson.encode(msg));
+        Map<String, Object> back = DapJson.object(decoded);
+        assertEquals(3, DapJson.integer(back.get("seq"), 0));
+        assertTrue(DapJson.bool(back.get("ok")));
+        assertEquals("hi\n", DapJson.str(back.get("name")));
+        List<Object> args = DapJson.array(back.get("args"));
+        assertEquals("a", DapJson.str(args.get(0)));
+        assertEquals(2, DapJson.integer(args.get(1), 0));
+    }
+
+    @Test
+    public void nativeStopOnEntryThenContinue() throws Exception {
+        if (!NativeDebug.available()) {
+            return;
+        }
+        Path dir = Files.createTempDirectory("rg-nd");
+        Path file = dir.resolve("hello.rg");
+        Files.writeString(file, """
+                fn main(): Int {
+                    print("hi");
+                    return 0;
+                }
+                """, StandardCharsets.UTF_8);
+        CountDownLatch paused = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(1);
+        AtomicInteger code = new AtomicInteger(-1);
+        StringBuffer log = new StringBuffer();
+        NativeDebug dbg = new NativeDebug(file, List.of(file.toString()), dir, new Debug.Listener() {
+            @Override
+            public void onPaused(String reason) {
+                paused.countDown();
+            }
+
+            @Override
+            public void onOutput(String text, boolean error) {
+                if (text != null) {
+                    log.append(text);
+                }
+            }
+
+            @Override
+            public void onExited(int exit, String message) {
+                code.set(exit);
+                if (message != null && !message.isEmpty()) {
+                    log.append(message);
+                }
+                done.countDown();
+            }
+        });
+        dbg.setStopOnEntry(false);
+        Debug.Breakpoint bp = new Debug.Breakpoint();
+        bp.line = 2;
+        dbg.setBreakpoints(file.toAbsolutePath().toString(), List.of(bp));
+        Thread thread = new Thread(dbg::start, "rg-nd-test");
+        thread.start();
+        try {
+            long deadline = System.currentTimeMillis() + 45_000;
+            while (paused.getCount() > 0 && System.currentTimeMillis() < deadline) {
+                if (done.getCount() == 0) {
+                    break;
+                }
+                paused.await(1, TimeUnit.SECONDS);
+            }
+            assertTrue("native debug did not pause: " + log, paused.getCount() == 0);
+            assertFalse("empty stack: " + log, dbg.stack().isEmpty());
+            dbg.resume(Debug.Mode.Run);
+            assertTrue("native debug did not exit: " + log, done.await(45, TimeUnit.SECONDS));
+            assertEquals(log.toString(), 0, code.get());
+        } finally {
+            dbg.abort();
+            thread.join(5_000);
+        }
+    }
 
     @Test
     public void hitCountParsing() {
@@ -185,7 +270,7 @@ public class DebugTest {
 
     @Test
     public void fileSuiteNativePassAndFail() throws Exception {
-        if (LlvmLink.findClang() == null) {
+        if (!LlvmLink.canRunClang()) {
             return;
         }
         Path root = Files.createTempDirectory("rg-native-suite");

@@ -39,10 +39,12 @@ public final class RoseGoldDebugRunner extends GenericProgramRunner<RunnerSettin
                 .startSession(environment, new XDebugProcessStarter() {
                     @Override
                     public @NotNull XDebugProcess start(@NotNull XDebugSession session) throws ExecutionException {
-                        return RoseGoldDebugProcess.create(
-                                session,
-                                (RoseGoldRunConfiguration) environment.getRunProfile()
-                        );
+                        RoseGoldRunConfiguration configuration =
+                                (RoseGoldRunConfiguration) environment.getRunProfile();
+                        if (configuration.isRunNative()) {
+                            return RoseGoldDebugProcess.createNative(session, configuration);
+                        }
+                        return RoseGoldDebugProcess.create(session, configuration);
                     }
                 });
         return session.getRunContentDescriptor();

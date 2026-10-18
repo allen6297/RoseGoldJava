@@ -16,8 +16,8 @@ public final class RoseGoldLexer extends LexerBase {
             "return", "break", "continue", "pass",
             "spawn", "await", "try", "do", "throws", "throw", "catch",
             "struct", "data", "class", "trait", "extends", "enum", "mod", "impl",
-            "fn", "var", "const", "signal",
-            "pub", "private", "protected", "async", "abstract", "final",
+            "fn", "var", "const", "export", "signal",
+            "pub", "private", "protected", "async", "abstract", "final", "static",
             "self", "super"
     );
 
@@ -27,7 +27,7 @@ public final class RoseGoldLexer extends LexerBase {
             "Channel", "Task", "Fn"
     );
 
-    private static final Set<String> CONSTANTS = Set.of("true", "false", "none");
+    private static final Set<String> CONSTANTS = Set.of("true", "false", "null", "none");
 
     private CharSequence buffer = "";
     private int start;
